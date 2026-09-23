@@ -5,6 +5,12 @@
 ; Format:
 ;   [section] ; section goes between []
 ;   param=value ; assign values to parameters
+;
+; DO NOT add explanatory comments between settings here.
+; The editor rewrites this file and will merge adjacent comment lines into
+; the following key, silently turning it into a garbage entry and dropping
+; the real setting. Put explanations in README.md / docs/ instead.
+; Also: close the editor before hand-editing this file.
 
 config_version=5
 
@@ -12,16 +18,14 @@ config_version=5
 
 config/name="PartyGames"
 config/description="局域网多人聚会游戏合集（你画我猜 / 画猜接龙 / UNO）"
+run/main_scene="res://games/draw_guess/main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
-run/main_scene="res://games/draw_guess/main.tscn"
 
 [display]
 
 window/size/viewport_width=1080
 window/size/viewport_height=1920
-# 桌面端试玩时把窗口缩到 540x960，否则 1080x1920 的窗口比多数显示器还高。
-# 这两个键只在桌面平台生效，手机导出时会被忽略。
 window/size/window_width_override=540
 window/size/window_height_override=960
 window/stretch/mode="canvas_items"
