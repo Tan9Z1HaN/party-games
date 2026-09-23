@@ -583,8 +583,11 @@ func _on_phase_changed(phase: int, _seconds: float) -> void:
 
 
 func _on_candidates(candidates: Array) -> void:
-	for child in _choose_box.get_children():
-		child.queue_free()
+	_clear(_choose_box)
+	# 候选词只该发给画手。正常情况下主机根本不会发给你，
+	# 但这里再加一道：不是画手就不渲染，免得哪天路由出岔子直接泄题。
+	if _networked and not _game.is_drawer(_local()):
+		return
 	for i in candidates.size():
 		var index := i
 		var entry: Dictionary = candidates[i]
@@ -653,7 +656,11 @@ func _refresh() -> void:
 	_play_area.visible = phase != DrawGuessGame.Phase.IDLE
 	_setup_panel.visible = phase == DrawGuessGame.Phase.IDLE
 	_pass_panel.visible = _awaiting_pass and phase == DrawGuessGame.Phase.CHOOSING
-	_choose_panel.visible = (not _awaiting_pass) and phase == DrawGuessGame.Phase.CHOOSING
+	# 选词面板只有画手能看。少了 is_drawer 这一条，
+	# 画手在选的时候所有人屏幕上都会弹出选词界面。
+	_choose_panel.visible = (not _awaiting_pass) \
+		and phase == DrawGuessGame.Phase.CHOOSING \
+		and _game.is_drawer(_local())
 	_result_panel.visible = phase == DrawGuessGame.Phase.ROUND_END
 	_final_panel.visible = phase == DrawGuessGame.Phase.FINISHED
 
@@ -701,6 +708,11 @@ func _update_live() -> void:
 	elif phase == DrawGuessGame.Phase.ROUND_END:
 		_word_label.text = ""
 		_hint_label.text = tr("本回合结束")
+	elif phase == DrawGuessGame.Phase.CHOOSING:
+		# 别人在选词时不该看空面板，给一句明确的状态
+		_word_label.text = ""
+		if not _game.is_drawer(_local()):
+			_hint_label.text = tr("%s 正在选词…") % _name_of(_game.get_drawer_peer_id())
 	else:
 		_word_label.text = ""
 		_hint_label.text = ""
