@@ -51,6 +51,14 @@ func _test_export_preset() -> void:
 			bool(config.get_value(options, "architectures/x86_64", false)))
 		_check("含 arm64-v8a 架构（真机要用）",
 			bool(config.get_value(options, "architectures/arm64-v8a", false)))
+
+		# 同样只在真机上才暴露的一类问题：没有 INTERNET 权限就创建不了任何
+		# socket，联网功能全线失败。Godot 新建预设时把所有权限都默认填 false。
+		_check("开了 INTERNET 权限（联机必需）",
+			bool(config.get_value(options, "permissions/internet", false)),
+			"权限为 false 时，安卓上建房/加入都会失败")
+		_check("开了网络状态权限",
+			bool(config.get_value(options, "permissions/access_network_state", false)))
 		break
 
 	_check("存在 Android 预设", found)

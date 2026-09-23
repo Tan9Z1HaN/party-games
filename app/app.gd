@@ -164,7 +164,13 @@ func _show_lobby() -> void:
 func _on_host_pressed() -> void:
 	var port := _room.host_room(_nickname.text, Protocol.MAX_PLAYERS)
 	if port == 0:
-		_menu_status.text = tr("建房失败：端口都占用了")
+		var code := _room.transport.get_last_host_error()
+		var hint := tr("换个端口再试")
+		if code == 20:
+			hint = tr("系统不让创建网络连接。安卓版请确认导出时开了网络权限；电脑上检查防火墙或安全软件")
+		elif code == 32:
+			hint = tr("端口被占用了，换个端口再试")
+		_menu_status.text = tr("建房失败（错误码 %d）：%s") % [code, hint]
 		_port.text = str(Protocol.GAME_PORT)
 		return
 	_port.text = str(port)

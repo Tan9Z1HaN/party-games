@@ -45,6 +45,7 @@ var _connecting := false
 var _connect_elapsed := 0.0
 var _ping_elapsed := 0.0
 var _pings := {}
+var _last_host_error := OK
 
 
 func _ready() -> void:
@@ -78,9 +79,17 @@ func _process(delta: float) -> void:
 ## 成功返回实际监听的端口号，失败返回 0。
 func host(max_players: int) -> int:
 	leave()
+	_last_host_error = OK
 
-	var port := Protocol.GAME_PORT
-	for attempt in Protocol.PORT_RETRIES:
+	# 先试几个固定端口（好让人手输地址），再退到随机高位端口兜底。
+	# 固定端口可能撞上别的程序、被 Hyper-V/WSL 保留，或者被安全软件拦。
+	var ports: Array[int] = []
+	for i in Protocol.PORT_RETRIES:
+		ports.append(Protocol.GAME_PORT + i * Protocol.PORT_STEP)
+	for i in 8:
+		ports.append(randi_range(27000, 49000))
+
+	for port in ports:
 		var peer := ENetMultiplayerPeer.new()
 		# ENet 的 max_clients 不含主机自己
 		var err := peer.create_server(port, maxi(1, max_players - 1))
@@ -90,10 +99,18 @@ func host(max_players: int) -> int:
 			_host_port = port
 			host_started.emit(port)
 			return port
-		port += Protocol.PORT_STEP
+		_last_host_error = err
 
-	push_error("起主机失败：从 %d 起连续 %d 个端口都被占用" % [Protocol.GAME_PORT, Protocol.PORT_RETRIES])
+	# 20 = ERR_CANT_CREATE（创建不了 socket，安卓上多半是没给 INTERNET 权限）
+	# 32 = ERR_ALREADY_IN_USE
+	push_error("起主机失败，最后一次错误码 %d（20=创建不了，32=已被占用）" % _last_host_error)
 	return 0
+
+
+## 上次建房失败的错误码。UI 用它给出真实原因，
+## 不要再一律说成「端口被占用」——那会把权限问题伪装成端口冲突。
+func get_last_host_error() -> int:
+	return _last_host_error
 
 
 ## 作为客户端连接指定主机。
