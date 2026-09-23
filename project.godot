@@ -20,6 +20,10 @@ run/main_scene="res://games/draw_guess/main.tscn"
 
 window/size/viewport_width=1080
 window/size/viewport_height=1920
+# 桌面端试玩时把窗口缩到 540x960，否则 1080x1920 的窗口比多数显示器还高。
+# 这两个键只在桌面平台生效，手机导出时会被忽略。
+window/size/window_width_override=540
+window/size/window_height_override=960
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=1
