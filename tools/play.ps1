@@ -8,12 +8,22 @@
 #   .\tools\play.ps1 -Godot 'C:\path\to\godot.exe'
 
 param(
-    [string]$Godot = 'D:\Godot Progame\Godot_v4.7-stable_win64.exe\Godot_v4.7-stable_win64.exe',
+    # Leave empty to auto-pick the newest Godot editor build under -GodotRoot.
+    [string]$Godot = '',
+    [string]$GodotRoot = 'D:\Godot Progame',
     [string]$Project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 )
 
-if (-not (Test-Path -LiteralPath $Godot)) {
-    Write-Host "Godot not found: $Godot" -ForegroundColor Red
+. (Join-Path $PSScriptRoot 'find_godot.ps1')
+
+if ([string]::IsNullOrWhiteSpace($Godot)) {
+    $Godot = Find-Godot -Kind Editor -Root $GodotRoot
+}
+
+if ([string]::IsNullOrWhiteSpace($Godot) -or -not (Test-Path -LiteralPath $Godot)) {
+    Write-Host 'Godot editor build not found.' -ForegroundColor Red
+    Write-Host "Looked under: $GodotRoot" -ForegroundColor Red
+    Write-Host 'Pass -Godot <path> to point at it explicitly.' -ForegroundColor Red
     exit 2
 }
 

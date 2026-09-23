@@ -10,9 +10,17 @@
 #   .\tools\run_tests.ps1 -Godot 'C:\path\to\godot_console.exe'
 
 param(
-    [string]$Godot = 'D:\Godot Progame\Godot_v4.7-stable_win64.exe\Godot_v4.7-stable_win64_console.exe',
+    # Leave empty to auto-pick the newest Godot console build under -GodotRoot.
+    [string]$Godot = '',
+    [string]$GodotRoot = 'D:\Godot Progame',
     [string]$Project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 )
+
+. (Join-Path $PSScriptRoot 'find_godot.ps1')
+
+if ([string]::IsNullOrWhiteSpace($Godot)) {
+    $Godot = Find-Godot -Kind Console -Root $GodotRoot
+}
 
 $suites = @(
     'res://drawing/tests/run_tests.gd',
@@ -20,10 +28,14 @@ $suites = @(
     'res://games/draw_guess/tests/smoke_scene.gd'
 )
 
-if (-not (Test-Path -LiteralPath $Godot)) {
-    Write-Host "Godot not found: $Godot" -ForegroundColor Red
+if ([string]::IsNullOrWhiteSpace($Godot) -or -not (Test-Path -LiteralPath $Godot)) {
+    Write-Host 'Godot console build not found.' -ForegroundColor Red
+    Write-Host "Looked under: $GodotRoot" -ForegroundColor Red
+    Write-Host 'Pass -Godot <path> to point at it explicitly.' -ForegroundColor Red
     exit 2
 }
+
+Write-Host "Godot: $Godot" -ForegroundColor DarkGray
 
 $failed = @()
 
