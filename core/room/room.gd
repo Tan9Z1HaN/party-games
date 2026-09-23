@@ -276,6 +276,10 @@ func rpc_game_input(payload: PackedByteArray) -> void:
 	if sender <= 0 or not _players.has(sender):
 		# 没完成握手就发游戏报文，一律丢掉
 		return
+	# 转交给游戏逻辑。**身份必须用 sender**，不能用本机 id——
+	# 否则客户端的一切操作都会被当成房主自己做的。
+	if _game != null:
+		_game.on_player_input(sender, payload)
 	game_input.emit(sender, payload)
 
 

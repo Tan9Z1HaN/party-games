@@ -48,6 +48,7 @@ var _hint_label: Label
 var _word_label: Label
 var _choose_box: HBoxContainer
 var _color_grid: GridContainer
+var _toolbar: HBoxContainer
 var _guesser_grid: GridContainer
 var _guess_target: OptionButton
 var _guess_input: LineEdit
@@ -196,6 +197,7 @@ func _build_toolbar() -> Control:
 	row.add_child(actions)
 
 	_rebuild_palette()
+	_toolbar = row
 	return row
 
 
@@ -595,7 +597,15 @@ func _refresh() -> void:
 	if _awaiting_pass:
 		_pass_label.text = tr("把手机交给 %s（本回合画手）") % _name_of(_local())
 
-	_board.set_drawing_enabled(phase == DrawGuessGame.Phase.DRAWING and not _awaiting_pass)
+	# 只有当前画手能画。热座模式下本机永远是画手，这条恒真；
+	# 联机时若不判断，作画阶段所有人的画板都是开着的。
+	_board.set_drawing_enabled(
+		phase == DrawGuessGame.Phase.DRAWING
+		and not _awaiting_pass
+		and _game.is_drawer(_local()))
+	# 工具栏也只给画手看。别人点「撤销」会把自己那份画布上的远端笔迹删掉，
+	# 而且删不回来——后续只会有新笔迹，不会重发旧的。
+	_toolbar.visible = _game.is_drawer(_local())
 	_update_live()
 
 
@@ -684,7 +694,14 @@ func _submit_guess() -> void:
 		return
 	# 联机时只能替自己猜；热座模式下可以选替哪个座位猜
 	var target := _local() if _networked else _guess_target.get_selected_id()
-	if target == _local():
+	# 两种模式挡的对象不一样：
+	# 联机时只能替自己猜，所以挡的是「本机玩家是画手」；
+	# 热座时可以替任何座位猜，挡的是「选的这个座位是画手」。
+	if _networked:
+		if _game.is_drawer(_local()):
+			_feedback_label.text = tr("画手不能猜词")
+			return
+	elif target == _game.get_drawer_peer_id():
 		_feedback_label.text = tr("画手不能猜词")
 		return
 	_game.on_player_input(target, DrawGuessMessages.encode_guess(text))
@@ -701,7 +718,8 @@ func _on_local_stroke(chunk: PackedByteArray) -> void:
 
 func _on_clear_pressed() -> void:
 	_board.clear_canvas()
-	if _game != null and _game.get_phase() == DrawGuessGame.Phase.DRAWING:
+	if _game != null and _game.get_phase() == DrawGuessGame.Phase.DRAWING \
+			and _game.is_drawer(_local()):
 		_submit(_local(), DrawGuessMessages.encode_clear())
 
 
