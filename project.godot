@@ -14,6 +14,7 @@ config/name="PartyGames"
 config/description="局域网多人聚会游戏合集（你画我猜 / 画猜接龙 / UNO）"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
+run/main_scene="res://games/draw_guess/main.tscn"
 
 [display]
 

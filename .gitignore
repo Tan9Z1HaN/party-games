@@ -20,3 +20,10 @@ mono_crash.*.json
 Thumbs.db
 .vscode/
 .idea/
+
+# Godot 在编辑器数据目录不可写时，会把这些目录建到工程根。
+# 正常情况下不会出现，留着防止误提交。
+export_templates/
+feature_profiles/
+script_templates/
+text_editor_themes/
