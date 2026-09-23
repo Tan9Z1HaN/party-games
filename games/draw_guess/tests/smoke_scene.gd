@@ -55,13 +55,44 @@ func _test_setup_screen() -> void:
 	_check("起始隐藏游戏区", not _scene._play_area.visible)
 	_check("难度有三档", _scene._difficulty_input.item_count == 3)
 	_check("人数从 3 起", _scene._player_count.item_count == 6, "%d" % _scene._player_count.item_count)
+	_check("回合数是下拉框", _scene._rounds_input is OptionButton)
+	_check("时长是下拉框", _scene._seconds_input is OptionButton)
+	_test_contrast()
+
+
+## 浅色底 + 黑字必须成套。只改一头就会出现「浅字压浅底」那种读不出来的情况，
+## 而且按钮的 hover / pressed / disabled 各有独立的颜色，漏一个都会翻车。
+func _test_contrast() -> void:
+	var theme: Theme = _scene.theme
+	_check("挂了主题", theme != null)
+	if theme == null:
+		return
+
+	var label_ink: Color = theme.get_color("font_color", "Label")
+	_check("正文是深色", label_ink.v < 0.3, str(label_ink))
+
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		var c: Color = theme.get_color(state, "Button")
+		_check("按钮 %s 是深色" % state, c.v < 0.3, str(c))
+
+	for tname in ["Button", "OptionButton"]:
+		var box := theme.get_stylebox("normal", tname) as StyleBoxFlat
+		_check("%s 底色是浅色" % tname, box != null and box.bg_color.v > 0.85, str(box))
+
+	var disabled: Color = theme.get_color("font_disabled_color", "Button")
+	var disabled_box := theme.get_stylebox("disabled", "Button") as StyleBoxFlat
+	_check("禁用态仍然可读", disabled_box != null and absf(disabled.v - disabled_box.bg_color.v) > 0.25,
+		"字 %s / 底 %s" % [str(disabled), str(disabled_box)])
+
+	var edit_ink: Color = theme.get_color("font_color", "LineEdit")
+	_check("输入框文字是深色", edit_ink.v < 0.3, str(edit_ink))
 
 
 func _test_start_game() -> void:
 	print("\n-- 开始游戏 --")
 	_scene._player_count.select(1)          # 4 人
-	_scene._rounds_input.value = 1
-	_scene._seconds_input.value = 60
+	_scene._rounds_input.select(0)          # 1 回合
+	_scene._seconds_input.select(1)         # 60 秒
 	_scene._start_game()
 
 	var game = _scene._game

@@ -9,6 +9,9 @@ export_presets.cfg
 # Android build artifacts
 android/
 build/
+*.apk
+*.aab
+*.idsig
 
 # Mono/C# (unused for now, kept for safety)
 .mono/

@@ -5,12 +5,6 @@
 ; Format:
 ;   [section] ; section goes between []
 ;   param=value ; assign values to parameters
-;
-; DO NOT add explanatory comments between settings here.
-; The editor rewrites this file and will merge adjacent comment lines into
-; the following key, silently turning it into a garbage entry and dropping
-; the real setting. Put explanations in README.md / docs/ instead.
-; Also: close the editor before hand-editing this file.
 
 config_version=5
 
@@ -39,4 +33,4 @@ pointing/emulate_touch_from_mouse=true
 [rendering]
 
 renderer/rendering_method="mobile"
-renderer/rendering_method.mobile="mobile"
+textures/vram_compression/import_etc2_astc=true
