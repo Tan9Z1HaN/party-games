@@ -99,14 +99,9 @@ func _process(delta: float) -> void:
 # ------------------------------------------------------------------ 界面搭建
 
 func _build() -> void:
-	theme = _make_light_theme()
-
-	# 铺一层浅色底。默认的清除色是深灰，黑字压上去同样看不清。
-	var backdrop := ColorRect.new()
-	backdrop.color = BACKDROP
-	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
-	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(backdrop)
+	# 和主菜单共用同一套主题与背景，不然单机模式看起来像另一个 App
+	theme = LightTheme.build()
+	add_child(LightTheme.backdrop())
 
 	var margin := MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -165,7 +160,7 @@ func _build_hint_bar() -> Control:
 	box.add_theme_constant_override("separation", 2)
 	_hint_label = _label("", 30)
 	_word_label = _label("", 34)
-	_word_label.add_theme_color_override("font_color", INK_ACCENT)
+	_word_label.add_theme_color_override("font_color", LightTheme.INK_ACCENT)
 	box.add_child(_hint_label)
 	box.add_child(_word_label)
 	return box
@@ -448,6 +443,11 @@ func _build_setup_panel() -> void:
 	var start := _button(tr("开始游戏"), 36)
 	start.pressed.connect(_start_game)
 	box.add_child(start)
+
+	# 单机模式是从 app 的菜单进来的，得给条路回去
+	var back := _button(tr("返回主菜单"), 28)
+	back.pressed.connect(func(): exit_requested.emit())
+	box.add_child(back)
 
 	_setup_panel.add_child(box)
 
@@ -873,15 +873,7 @@ func _on_stroke_forwarded(payload: PackedByteArray) -> void:
 
 func _panel() -> PanelContainer:
 	var p := PanelContainer.new()
-	var style := StyleBoxFlat.new()
-	style.bg_color = SURFACE
-	style.set_corner_radius_all(0)
-	# 面板内边距。没有它的话内容会顶到屏幕边缘，正文字符被切、按钮贴边。
-	style.content_margin_left = 44.0
-	style.content_margin_right = 44.0
-	style.content_margin_top = 44.0
-	style.content_margin_bottom = 44.0
-	p.add_theme_stylebox_override("panel", style)
+	p.add_theme_stylebox_override("panel", LightTheme.panel_style())
 	return p
 
 

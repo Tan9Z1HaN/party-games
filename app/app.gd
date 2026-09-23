@@ -75,6 +75,12 @@ func _build_menu() -> void:
 	host_button.pressed.connect(_on_host_pressed)
 	box.add_child(host_button)
 
+	# 没网也能玩：一台手机几个人传着玩（单机同屏）
+	box.add_child(LightTheme.label(tr("没网也能玩"), 42))
+	var solo_button := LightTheme.button(tr("单机同屏玩（一台手机轮流）"), 44)
+	solo_button.pressed.connect(_on_solo_pressed)
+	box.add_child(solo_button)
+
 	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 42))
 	var address_row := HBoxContainer.new()
 	address_row.add_theme_constant_override("separation", 10)
@@ -154,6 +160,32 @@ func _show_menu(message := "") -> void:
 	_lobby.visible = false
 	_menu_status.text = message
 	LightTheme.present(_menu)
+
+
+## 装载对局界面。单机和联机用的是同一个场景：
+## 单机进来后会停在自己的设置页（选人数、回合数那些），
+## 联机则由 setup_networked() 直接进入对局。
+func _open_game_screen() -> bool:
+	_menu.visible = false
+	_lobby.visible = false
+	if _game_screen != null:
+		_game_screen.queue_free()
+		_game_screen = null
+
+	var scene := load(GAME_SCENE)
+	if scene == null:
+		_on_connection_lost(tr("加载游戏界面失败：%s") % GAME_SCENE)
+		return false
+
+	_game_screen = scene.instantiate()
+	add_child(_game_screen)
+	_game_screen.exit_requested.connect(_on_game_exit_requested)
+	LightTheme.present(_game_screen)
+	return true
+
+
+func _on_solo_pressed() -> void:
+	_open_game_screen()
 
 
 func _show_lobby() -> void:
@@ -259,20 +291,12 @@ func address_of_host(state: Dictionary) -> String:
 
 
 func _on_game_started(game_id: String, config: Dictionary) -> void:
-	_lobby.visible = false
-	_menu.visible = false
-
-	var scene := load(GAME_SCENE)
-	if scene == null:
-		_on_connection_lost(tr("加载游戏界面失败：%s") % GAME_SCENE)
+	if not _open_game_screen():
 		return
-
-	_game_screen = scene.instantiate()
-	add_child(_game_screen)
 	_game_screen.setup_networked(_room, _room.get_state()["players"], config)
-	_game_screen.exit_requested.connect(_on_game_exit_requested)
 
 
 func _on_game_exit_requested() -> void:
+	var was_online := _room.is_in_room()
 	_room.leave_room()
-	_show_menu(tr("已退出房间。再玩一局请重新建房或加入。"))
+	_show_menu(tr("已退出房间。再玩一局请重新建房或加入。") if was_online else "")
