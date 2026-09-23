@@ -1,0 +1,264 @@
+extends Control
+
+## 应用外壳：主菜单 -> 大厅 -> 对局。
+##
+## Room 是本场景的子节点，路径固定为 /root/Main/Room ——
+## 联网那条链路全靠它，改动节点树形状会让 RPC 静默失效。
+
+const GAME_SCENE := "res://games/draw_guess/main.tscn"
+
+## 大厅里暂时只用一个固定配置。等这一版跑通了再加配置界面。
+const DEFAULT_CONFIG := {
+	"rounds": 3,
+	"round_seconds": 80,
+	"difficulty": 2,
+	"hints": true,
+}
+
+var _room: Room
+var _menu: PanelContainer
+var _lobby: PanelContainer
+var _game_screen: Control = null
+
+var _nickname: LineEdit
+var _ip: LineEdit
+var _port: LineEdit
+var _menu_status: Label
+
+var _lobby_title: Label
+var _lobby_address: Label
+var _lobby_players: VBoxContainer
+var _lobby_start: Button
+var _lobby_status: Label
+
+
+func _ready() -> void:
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	theme = LightTheme.build()
+	add_child(LightTheme.backdrop())
+
+	_room = $Room
+	_room.joined.connect(_on_joined)
+	_room.refused.connect(_on_refused)
+	_room.connection_lost.connect(_on_connection_lost)
+	_room.state_changed.connect(_on_state_changed)
+	_room.game_started.connect(_on_game_started)
+
+	_build_menu()
+	_build_lobby()
+	_show_menu()
+
+
+# ---------------------------------------------------------------- 界面搭建
+
+func _build_menu() -> void:
+	_menu = PanelContainer.new()
+	_menu.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_menu.add_theme_stylebox_override("panel", LightTheme.panel_style())
+	add_child(_menu)
+
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 16)
+
+	box.add_child(LightTheme.label(tr("聚会游戏"), 54))
+	box.add_child(LightTheme.label(tr("同一 Wi-Fi 或手机热点下，各自拿手机玩"), 24))
+
+	box.add_child(LightTheme.label(tr("你的昵称"), 26))
+	_nickname = LineEdit.new()
+	_nickname.text = "玩家"
+	_nickname.custom_minimum_size = Vector2(0, 64)
+	box.add_child(_nickname)
+
+	box.add_child(LightTheme.label(tr("创建房间"), 26))
+	var host_button := LightTheme.button(tr("我是房主，建房"), 32)
+	host_button.pressed.connect(_on_host_pressed)
+	box.add_child(host_button)
+
+	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 26))
+	var address_row := HBoxContainer.new()
+	address_row.add_theme_constant_override("separation", 10)
+	_ip = LineEdit.new()
+	_ip.placeholder_text = tr("192.168.1.5")
+	_ip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ip.custom_minimum_size = Vector2(0, 64)
+	address_row.add_child(_ip)
+	_port = LineEdit.new()
+	_port.text = str(Protocol.GAME_PORT)
+	_port.custom_minimum_size = Vector2(160, 64)
+	address_row.add_child(_port)
+	box.add_child(address_row)
+
+	var join_button := LightTheme.button(tr("加入"), 32)
+	join_button.pressed.connect(_on_join_pressed)
+	box.add_child(join_button)
+
+	_menu_status = LightTheme.label("", 24)
+	_menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_menu_status)
+
+	_menu.add_child(box)
+
+
+func _build_lobby() -> void:
+	_lobby = PanelContainer.new()
+	_lobby.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_lobby.add_theme_stylebox_override("panel", LightTheme.panel_style())
+	add_child(_lobby)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 16)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	_lobby_title = LightTheme.label("", 40)
+	box.add_child(_lobby_title)
+
+	_lobby_address = LightTheme.label("", 34)
+	_lobby_address.add_theme_color_override("font_color", LightTheme.INK_ACCENT)
+	box.add_child(_lobby_address)
+
+	var copy := LightTheme.button(tr("复制地址发给朋友"), 28)
+	copy.pressed.connect(func():
+		DisplayServer.clipboard_set(_lobby_address.text))
+	box.add_child(copy)
+
+	box.add_child(LightTheme.label(tr("玩家"), 26))
+	_lobby_players = VBoxContainer.new()
+	_lobby_players.add_theme_constant_override("separation", 6)
+	box.add_child(_lobby_players)
+
+	_lobby_start = LightTheme.button(tr("开始游戏"), 34)
+	_lobby_start.pressed.connect(_on_start_pressed)
+	box.add_child(_lobby_start)
+
+	var leave := LightTheme.button(tr("离开房间"), 26)
+	leave.pressed.connect(func():
+		_room.leave_room()
+		_show_menu(tr("已离开房间")))
+	box.add_child(leave)
+
+	_lobby_status = LightTheme.label("", 24)
+	_lobby_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_lobby_status)
+
+	_lobby.add_child(box)
+
+
+# ---------------------------------------------------------------- 流程
+
+func _show_menu(message := "") -> void:
+	if _game_screen != null:
+		_game_screen.queue_free()
+		_game_screen = null
+	_menu.visible = true
+	_lobby.visible = false
+	_menu_status.text = message
+
+
+func _show_lobby() -> void:
+	_menu.visible = false
+	_lobby.visible = true
+	_refresh_lobby()
+
+
+func _on_host_pressed() -> void:
+	var port := _room.host_room(_nickname.text, Protocol.MAX_PLAYERS)
+	if port == 0:
+		_menu_status.text = tr("建房失败：端口都占用了")
+		_port.text = str(Protocol.GAME_PORT)
+		return
+	_port.text = str(port)
+	_show_lobby()
+
+
+func _on_join_pressed() -> void:
+	var address := _ip.text.strip_edges()
+	if address.is_empty():
+		_menu_status.text = tr("先填房主的 IP 地址")
+		return
+	_menu_status.text = tr("正在连接 %s ...") % address
+	_room.join_room(address, int(_port.text), _nickname.text)
+
+
+func _on_start_pressed() -> void:
+	_room.set_game("draw_guess", DEFAULT_CONFIG)
+	if not _room.start_game():
+		_lobby_status.text = tr("开局失败：至少要两个人")
+
+
+func _on_joined() -> void:
+	if not _lobby.visible:
+		_show_lobby()
+
+
+func _on_refused(reason: int) -> void:
+	var text := tr("连接被拒绝")
+	match reason:
+		Protocol.Refuse.VERSION_MISMATCH: text = tr("对方版本不一致，双方都得是最新版")
+		Protocol.Refuse.ROOM_FULL: text = tr("房间满了")
+		Protocol.Refuse.GAME_IN_PROGRESS: text = tr("对方已经开局了")
+		Transport.FailReason.TIMEOUT: text = tr("连不上：确认在同一个 Wi-Fi，或者让房主开热点")
+		Transport.FailReason.UNREACHABLE: text = tr("连不上：IP 地址可能填错了")
+	_on_connection_lost(text)
+
+
+func _on_connection_lost(reason: String) -> void:
+	var text := tr("和房主的连接断开了")
+	if reason != "host_left":
+		text = reason
+	_show_menu(text)
+
+
+func _on_state_changed(_state: Dictionary) -> void:
+	if _lobby.visible:
+		_refresh_lobby()
+
+
+func _refresh_lobby() -> void:
+	var state := _room.get_state()
+	var is_host := _room.is_host()
+
+	_lobby_title.text = tr("你是房主") if is_host else tr("已加入房间")
+
+	if is_host:
+		var ip := _room.transport.get_local_ip()
+		_lobby_address.text = "%s:%d" % [ip if not ip.is_empty() else "?", _room.transport.get_host_port()]
+	else:
+		_lobby_address.text = tr("房主：%s") % address_of_host(state)
+
+	LightTheme.clear_children(_lobby_players)
+	for entry in state["players"]:
+		var peer_id := int(entry["peer_id"])
+		var suffix := ""
+		if peer_id == int(state["host_id"]):
+			suffix = tr("（房主）")
+		elif peer_id == _room.get_local_id():
+			suffix = tr("（你）")
+		var ping := _room.transport.get_ping_ms(peer_id)
+		var ping_text := "" if ping < 0 else "   %d ms" % ping
+		_lobby_players.add_child(
+			LightTheme.label("%s%s%s" % [entry["name"], suffix, ping_text], 28))
+
+	_lobby_start.visible = is_host
+	_lobby_status.text = tr("把上面的地址告诉朋友，让他们在首页填进去") if is_host else ""
+
+
+func address_of_host(state: Dictionary) -> String:
+	for entry in state["players"]:
+		if int(entry["peer_id"]) == int(state["host_id"]):
+			return String(entry["name"])
+	return "?"
+
+
+func _on_game_started(game_id: String, config: Dictionary) -> void:
+	_lobby.visible = false
+	_menu.visible = false
+
+	var scene := load(GAME_SCENE)
+	if scene == null:
+		_on_connection_lost(tr("加载游戏界面失败：%s") % GAME_SCENE)
+		return
+
+	_game_screen = scene.instantiate()
+	add_child(_game_screen)
+	_game_screen.setup_networked(_room, _room.get_state()["players"], config)

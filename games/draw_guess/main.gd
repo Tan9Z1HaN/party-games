@@ -68,6 +68,12 @@ var _error_label: Label
 ## 而不是让游戏「一点开始就结束」。
 var _fatal_message := ""
 
+## 联机模式：非空表示这一局走房间，走网络收发；空表示单机热座。
+var _room: Room = null
+var _networked := false
+var _last_round := -1
+var _last_drawer := 0
+
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -417,14 +423,11 @@ func _start_game() -> void:
 	_game = DrawGuessGame.new()
 	add_child(_game)
 	_fatal_message = ""
-	_game.phase_changed.connect(_on_phase_changed)
-	_game.round_started.connect(_on_round_started)
-	_game.candidates_offered.connect(_on_candidates)
-	_game.guess_evaluated.connect(_on_guess_evaluated)
-	_game.someone_guessed.connect(_on_someone_guessed)
-	_game.round_settled.connect(_on_round_settled)
-	_game.game_finished.connect(_on_game_finished)
-	_game.fatal_error.connect(_on_fatal_error)
+	_networked = false
+	_room = null
+	_connect_game_signals()
+	_last_round = -1
+	_last_drawer = 0
 
 	var count := _player_count.get_selected_id()
 	var players: Array = []
@@ -449,8 +452,60 @@ func _start_game() -> void:
 	_refresh()
 
 
+## 联机入口。app.gd 收到开局广播后调用，两端都会走这里。
+func setup_networked(room: Room, players: Array, config: Dictionary) -> void:
+	_room = room
+	_networked = true
+	_fatal_message = ""
+
+	if _game != null:
+		_game.free()
+	_game = DrawGuessGame.new()
+	add_child(_game)
+	_connect_game_signals()
+	_game.setup(players, config)
+
+	room.attach_game(_game)
+	room.game_broadcast.connect(_on_net_broadcast)
+	room.game_snapshot.connect(_on_net_snapshot)
+
+	_setup_panel.visible = false
+	_play_area.visible = true
+	_rebuild_guesser_panel()
+	_rebuild_palette()
+	_last_round = -1
+	_last_drawer = 0
+
+	if room.is_host():
+		_game.start_round()
+	_refresh()
+
+
+func _connect_game_signals() -> void:
+	_game.phase_changed.connect(_on_phase_changed)
+	_game.round_started.connect(_on_round_started)
+	_game.candidates_offered.connect(_on_candidates)
+	_game.guess_evaluated.connect(_on_guess_evaluated)
+	_game.someone_guessed.connect(_on_someone_guessed)
+	_game.round_settled.connect(_on_round_settled)
+	_game.game_finished.connect(_on_game_finished)
+	_game.fatal_error.connect(_on_fatal_error)
+	_game.stroke_forwarded.connect(_on_stroke_forwarded)
+
+
+func _on_net_broadcast(payload: PackedByteArray) -> void:
+	if _game != null:
+		_game.on_remote_message(payload)
+
+
+func _on_net_snapshot(snapshot: Dictionary) -> void:
+	if _game != null:
+		_game.apply_snapshot(snapshot)
+
+
 func _on_round_started(_index: int) -> void:
-	_awaiting_pass = true
+	# 交接手机是单机热座才有的动作；联机时每个人手里就是自己的设备
+	_awaiting_pass = not _networked
 	_board.clear_canvas()
 	_rebuild_guesser_panel()
 	_refresh()
@@ -470,7 +525,7 @@ func _on_candidates(candidates: Array) -> void:
 		var entry: Dictionary = candidates[i]
 		var b := _button(String(entry["word"]), 30)
 		b.pressed.connect(func():
-			_game.on_player_input(_local(), DrawGuessMessages.encode_pick_word(index)))
+			_submit(_local(), DrawGuessMessages.encode_pick_word(index)))
 		_choose_box.add_child(b)
 	_refresh()
 
@@ -547,6 +602,13 @@ func _refresh() -> void:
 func _update_live() -> void:
 	if _game == null:
 		return
+	# 换回合或换画手都要清画板。客户端收不到 round_started（那是主机事件），
+	# 所以统一在这里按状态变化判断，两种模式都适用。
+	var drawer_now := _game.get_drawer_peer_id()
+	if _game.get_round_index() != _last_round or drawer_now != _last_drawer:
+		_last_round = _game.get_round_index()
+		_last_drawer = drawer_now
+		_board.clear_canvas()
 	var phase := _game.get_phase()
 	_round_label.text = tr("第 %d/%d 回合") % [
 		maxi(_game.get_round_index(), 1), _rounds_input.get_selected_id()]
@@ -580,6 +642,15 @@ func _update_live() -> void:
 func _rebuild_guesser_panel() -> void:
 	if _game == null:
 		return
+	if _networked:
+		# 联机时每个人在自己设备上打字猜，没人需要替别人点「猜对了」
+		_guesser_grid.visible = false
+		_guess_target.visible = false
+		_clear(_guesser_grid)
+		_guesser_buttons.clear()
+		return
+	_guesser_grid.visible = true
+	_guess_target.visible = true
 	_clear(_guesser_grid)
 	_guesser_buttons.clear()
 
@@ -594,7 +665,7 @@ func _rebuild_guesser_panel() -> void:
 		b.custom_minimum_size = Vector2(0, 64)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.pressed.connect(func():
-			_game.on_player_input(_local(), DrawGuessMessages.encode_mark_correct(peer_id)))
+			_submit(_local(), DrawGuessMessages.encode_mark_correct(peer_id)))
 		_guesser_grid.add_child(b)
 		_guesser_buttons[peer_id] = b
 
@@ -611,7 +682,8 @@ func _submit_guess() -> void:
 	var text := _guess_input.text.strip_edges()
 	if text.is_empty():
 		return
-	var target := _guess_target.get_selected_id()
+	# 联机时只能替自己猜；热座模式下可以选替哪个座位猜
+	var target := _local() if _networked else _guess_target.get_selected_id()
 	if target == _local():
 		_feedback_label.text = tr("画手不能猜词")
 		return
@@ -624,13 +696,13 @@ func _on_local_stroke(chunk: PackedByteArray) -> void:
 		return
 	# 联网后这里改为：房间层广播给其他人。
 	# 本机画手的笔迹已经本地渲染过了，不要再 apply 回来，否则会重影。
-	_game.on_player_input(_local(), DrawGuessMessages.encode_stroke(chunk))
+	_submit(_local(), DrawGuessMessages.encode_stroke(chunk))
 
 
 func _on_clear_pressed() -> void:
 	_board.clear_canvas()
 	if _game != null and _game.get_phase() == DrawGuessGame.Phase.DRAWING:
-		_game.on_player_input(_local(), DrawGuessMessages.encode_clear())
+		_submit(_local(), DrawGuessMessages.encode_clear())
 
 
 # ------------------------------------------------------------------ 小工具
@@ -675,7 +747,35 @@ func _button(text: String, font_size: int) -> Button:
 ## 必须是函数而不是缓存变量——候选词是在画手选出来之前就下发的，
 ## 缓存会导致选词报文带着过期的 peer_id 被权威端丢掉。
 func _local() -> int:
-	return _game.get_drawer_peer_id() if _game != null else 0
+	if _game == null:
+		return 0
+	if _networked and _room != null:
+		return _room.get_local_id()
+	return _game.get_drawer_peer_id()
+
+
+## 提交一个操作。
+## 联机时只能代表自己发（房主按来源校验身份，替别人发会被丢掉）；
+## 单机热座则可以代表任何一个座位，这正是"传着玩"需要的。
+func _submit(peer_id: int, payload: PackedByteArray) -> void:
+	if _game == null:
+		return
+	if _networked and _room != null:
+		_room.send_game_input(payload)
+	else:
+		_game.on_player_input(peer_id, payload)
+
+
+## 权威端转发的笔迹。本机画手自己画的不会被送回来，不会重影。
+func _on_stroke_forwarded(payload: PackedByteArray) -> void:
+	var msg := DrawGuessMessages.decode(payload)
+	if msg.is_empty():
+		return
+	match int(msg["action"]):
+		DrawGuessMessages.Action.STROKE:
+			_board.apply_remote_chunk(msg["payload"])
+		DrawGuessMessages.Action.CLEAR:
+			_board.clear_canvas()
 
 
 func _panel() -> PanelContainer:
