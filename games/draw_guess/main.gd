@@ -76,6 +76,10 @@ var _last_round := -1
 var _last_drawer := 0
 
 
+## 联机模式下玩家要求退出对局（回主菜单）。由 app.gd 处理。
+signal exit_requested
+
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	_build()
@@ -332,7 +336,7 @@ func _build_overlays() -> void:
 	_final_rows.add_theme_constant_override("separation", 6)
 	final_box.add_child(_final_rows)
 	var again := _button(tr("再来一局"), 30)
-	again.pressed.connect(_show_setup)
+	again.pressed.connect(_on_again_pressed)
 	final_box.add_child(again)
 	_final_panel.add_child(final_box)
 
@@ -416,6 +420,16 @@ func _show_setup() -> void:
 	_setup_panel.visible = true
 	_error_panel.visible = false
 	_fatal_message = ""
+
+
+## 单机热座：回本地设置页再来一局。
+## 联机：交给 app.gd 退出房间回主菜单——房主那边房间仍是「已开局」状态，
+## 直接跳回本地设置页只会让人以为还能接着玩。
+func _on_again_pressed() -> void:
+	if _networked:
+		exit_requested.emit()
+	else:
+		_show_setup()
 
 
 func _start_game() -> void:

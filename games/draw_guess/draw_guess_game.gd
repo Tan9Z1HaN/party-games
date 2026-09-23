@@ -414,6 +414,7 @@ func snapshot() -> Dictionary:
 		"guessed": _correct_at.keys(),
 		"hint": get_hint_text(),
 		"revealed": get_revealed_word(),
+		"rows": _round_rows.duplicate(true),
 		"players": _players.duplicate(true),
 	}
 
@@ -488,9 +489,15 @@ func _evaluate_guess(peer_id: int, text: String) -> void:
 		return
 	if _bank.matches(_entry, text):
 		_mark_correct(peer_id)
-		guess_evaluated.emit(peer_id, text, true, false)
-		# 让所有人都看到「谁猜对了」。答案本身不在这条报文里。
-		broadcast_requested.emit(DrawGuessMessages.encode_chat(peer_id, 0, ""))
+		# 只有真的记进 _correct_at 了才对外说「猜对了」。
+		# 原来是无条件广播，一旦 _mark_correct 提前返回，
+		# 客户端会显示猜对而主机什么都没有，两边就对不上。
+		if has_guessed(peer_id):
+			guess_evaluated.emit(peer_id, text, true, false)
+			# 让所有人都看到「谁猜对了」。答案本身不在这条报文里。
+			broadcast_requested.emit(DrawGuessMessages.encode_chat(peer_id, 0, ""))
+		else:
+			guess_evaluated.emit(peer_id, text, false, false)
 	else:
 		var near := _bank.is_close(_entry, text, NEAR_THRESHOLD)
 		guess_evaluated.emit(peer_id, text, false, near)

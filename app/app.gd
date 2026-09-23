@@ -268,3 +268,9 @@ func _on_game_started(game_id: String, config: Dictionary) -> void:
 	_game_screen = scene.instantiate()
 	add_child(_game_screen)
 	_game_screen.setup_networked(_room, _room.get_state()["players"], config)
+	_game_screen.exit_requested.connect(_on_game_exit_requested)
+
+
+func _on_game_exit_requested() -> void:
+	_room.leave_room()
+	_show_menu(tr("已退出房间。再玩一局请重新建房或加入。"))
