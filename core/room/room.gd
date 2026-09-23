@@ -73,6 +73,11 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	# 游戏计时由房间统一驱动：主机推进真实状态，客户端只做本地插值
+	# （否则倒计时会一跳一跳的）。
+	if _game != null:
+		_game.tick(delta)
+
 	# 房主定期把游戏状态推给客户端，用于校准倒计时等本地表现
 	if _mode != Mode.HOST or _game == null or not _started:
 		return

@@ -79,6 +79,14 @@ var _drawer_slot := -1
 var _candidates: Array = []
 var _entry: Dictionary = {}
 var _correct_at := {}
+
+## ---- 以下四项只在客户端有值，全部来自主机快照 ----
+## 主机单发给本机的答案。只有画手会收到，猜词者永远是空串。
+var _private_word := ""
+var _remote_drawer := 0
+var _remote_hint := ""
+var _remote_revealed := ""
+
 var _used_words := PackedStringArray()
 var _round_rows: Array = []
 var _history: Array = []
@@ -172,11 +180,17 @@ func start_round() -> void:
 	_candidates.shuffle()
 	_set_phase(Phase.CHOOSING, CHOOSE_SECONDS)
 	candidates_offered.emit(_candidates)
+	_deliver_candidates()
 	round_started.emit(_round_index)
 
 
 func tick(delta: float) -> void:
 	if not _is_authority():
+		# 客户端只把倒计时往前走，让界面不卡顿。
+		# 真正的判定和状态推进都在主机，每次收到快照会被拉回正确值。
+		if _phase == Phase.CHOOSING or _phase == Phase.DRAWING:
+			_time_left = maxf(0.0, _time_left - delta)
+			phase_changed.emit(_phase, _time_left)
 		return
 	if _phase == Phase.IDLE or _phase == Phase.FINISHED:
 		return
@@ -320,6 +334,8 @@ func get_scores() -> Dictionary:
 
 
 func get_drawer_peer_id() -> int:
+	if not _is_authority() and _remote_drawer != 0:
+		return _remote_drawer
 	if _drawer_slot < 0 or _drawer_slot >= _players.size():
 		return 0
 	return int(_players[_drawer_slot]["peer_id"])
@@ -336,6 +352,8 @@ func get_candidates() -> Array:
 ## 谜底。**只有本回合结束后才对外给值**，回合进行中返回空串。
 ## 猜词者屏幕上永远不该出现这个词，除非本回合已经结算。
 func get_revealed_word() -> String:
+	if not _is_authority():
+		return _remote_revealed
 	if _phase == Phase.ROUND_END or _phase == Phase.FINISHED:
 		return String(_entry.get("word", ""))
 	return ""
@@ -343,6 +361,9 @@ func get_revealed_word() -> String:
 
 ## 画手看到的完整信息
 func get_word_for(peer_id: int) -> String:
+	if not _is_authority():
+		# 客户端只有画手手里有主机单发过来的答案，其他人拿到的永远是空
+		return _private_word if is_drawer(peer_id) else get_revealed_word()
 	if is_drawer(peer_id) and not _entry.is_empty():
 		return String(_entry["word"])
 	return get_revealed_word()
@@ -350,6 +371,8 @@ func get_word_for(peer_id: int) -> String:
 
 ## 猜词者看到的提示：掩码 + 字数 + 类别
 func get_hint_text() -> String:
+	if not _is_authority() and not _remote_hint.is_empty():
+		return _remote_hint
 	if _entry.is_empty():
 		return ""
 	var word := String(_entry["word"])
@@ -456,6 +479,7 @@ func _choose_word(index: int) -> void:
 		String(_entry.get("category", "")),
 		int(_entry.get("difficulty", 1))
 	)
+	_deliver_word()
 	_set_phase(Phase.DRAWING, float(_cfg.get("round_seconds", DEFAULT_ROUND_SECONDS)))
 
 
@@ -465,9 +489,13 @@ func _evaluate_guess(peer_id: int, text: String) -> void:
 	if _bank.matches(_entry, text):
 		_mark_correct(peer_id)
 		guess_evaluated.emit(peer_id, text, true, false)
+		# 让所有人都看到「谁猜对了」。答案本身不在这条报文里。
+		broadcast_requested.emit(DrawGuessMessages.encode_chat(peer_id, 0, ""))
 	else:
 		var near := _bank.is_close(_entry, text, NEAR_THRESHOLD)
 		guess_evaluated.emit(peer_id, text, false, near)
+		if near:
+			broadcast_requested.emit(DrawGuessMessages.encode_chat(peer_id, 1, ""))
 
 
 func _mark_correct(peer_id: int) -> void:
@@ -556,3 +584,114 @@ func _allow_stroke(peer_id: int, nbytes: int) -> bool:
 		return false
 	bucket["tokens"] = float(bucket["tokens"]) - float(nbytes)
 	return true
+
+
+# ------------------------------------------------------------------ 联机分支
+
+## 把答案单发给画手。**绝对不能广播**——猜词者的机器上不该出现这个词。
+func _deliver_word() -> void:
+	if _entry.is_empty():
+		return
+	var word := String(_entry["word"])
+	var category := String(_entry.get("category", ""))
+	var difficulty := int(_entry.get("difficulty", 1))
+
+	# 单机热座（没联网）或画手就是主机自己：本机已经有答案了，不用绕网络
+	if not _is_networked() or get_drawer_peer_id() == get_local_id():
+		_apply_set_word(word, category, difficulty)
+		return
+
+	to_player_requested.emit(
+		get_drawer_peer_id(),
+		DrawGuessMessages.encode_set_word(word, category, difficulty))
+
+
+func _apply_set_word(word: String, category: String, difficulty: int) -> void:
+	_private_word = word
+	_entry = {"word": word, "category": category, "difficulty": difficulty}
+	word_selected.emit(word, category, difficulty)
+
+
+func get_local_id() -> int:
+	if not _is_networked():
+		return 0
+	return multiplayer.get_unique_id()
+
+
+func _is_networked() -> bool:
+	if not is_inside_tree():
+		return false
+	var mp := multiplayer
+	return mp != null and mp.multiplayer_peer != null
+
+
+## 收到主机广播来的报文。**只在客户端调用**，只更新表现，不做任何判定。
+func on_remote_message(payload: PackedByteArray) -> void:
+	if _is_authority():
+		return
+	var msg := DrawGuessMessages.decode(payload)
+	if msg.is_empty():
+		return
+
+	match int(msg["action"]):
+		DrawGuessMessages.Action.STROKE, DrawGuessMessages.Action.CLEAR:
+			# 交给界面画到画板上。本机画手自己画的不会被送回来，所以不会重影。
+			stroke_forwarded.emit(payload)
+
+		DrawGuessMessages.Action.SET_WORD:
+			_apply_set_word(
+				String(msg["word"]), String(msg.get("category", "")), int(msg.get("difficulty", 1)))
+
+		DrawGuessMessages.Action.CHAT:
+			var kind := int(msg["kind"])
+			guess_evaluated.emit(int(msg["peer_id"]), "", kind == 0, kind == 1)
+
+		DrawGuessMessages.Action.SET_CANDIDATES:
+			var words: PackedStringArray = msg["words"]
+			_candidates = []
+			for word in words:
+				_candidates.append({"word": word, "category": "", "difficulty": 0})
+			candidates_offered.emit(_candidates)
+
+
+## 收到主机的状态快照。用它把本地表现拉回正确值。
+func apply_snapshot(snapshot: Dictionary) -> void:
+	if _is_authority():
+		return
+
+	var previous_phase := _phase
+	_phase = int(snapshot.get("phase", _phase))
+	_time_left = float(snapshot.get("time_left", _time_left))
+	_round_index = int(snapshot.get("round_index", _round_index))
+	_remote_drawer = int(snapshot.get("drawer", 0))
+	_remote_hint = String(snapshot.get("hint", ""))
+	_remote_revealed = String(snapshot.get("revealed", ""))
+
+	var scores = snapshot.get("scores", null)
+	if scores is Dictionary:
+		_scores = scores.duplicate()
+
+	_correct_at.clear()
+	for peer_id in snapshot.get("guessed", []):
+		_correct_at[int(peer_id)] = 1.0
+
+	phase_changed.emit(_phase, _time_left)
+	scores_changed.emit(get_scores())
+	if previous_phase != _phase and _phase == Phase.ROUND_END:
+		round_settled.emit(_remote_revealed, [])
+	if previous_phase != _phase and _phase == Phase.FINISHED:
+		game_finished.emit()
+
+
+## 候选词也只发给画手。
+func _deliver_candidates() -> void:
+	if _candidates.is_empty():
+		return
+	# 单机热座或画手就是本机：已经有候选词了，不用绕网络
+	if not _is_networked() or get_drawer_peer_id() == get_local_id():
+		return
+	var words := PackedStringArray()
+	for entry in _candidates:
+		words.append(String(entry["word"]))
+	to_player_requested.emit(
+		get_drawer_peer_id(), DrawGuessMessages.encode_candidates(words))
