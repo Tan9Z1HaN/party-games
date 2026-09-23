@@ -49,6 +49,9 @@
 - **`.godot/` 已被 gitignore，绝对不要提交它。**
 - `*.uid`（Godot 4.4+ 的资源引用）和 `*.import` 文件**必须提交**。
 - **一个场景只有一个所有者。** 不要编辑不属于你的 `.tscn` / `.tres`。
+- **非资源数据文件必须在导出预设的 `include_filter` 里列出来**，否则不会被打进导出包。
+  词库 `data/words/words.txt` 就是例子。这类问题的特征是：编辑器里完全正常，
+  装到手机上才炸，而且日志还看不到。改 `export_presets.cfg` 前先读 README 的「导出到手机」。
 - 提交前用 `--headless` 跑一次导入，确认工程没被改坏：
 
   ```powershell

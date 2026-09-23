@@ -59,11 +59,17 @@ signal round_settled(word: String, rows: Array)
 signal scores_changed(scores: Dictionary)
 signal stroke_forwarded(payload: PackedByteArray)
 
+## 开局条件的致命错误：词库读不到、抽不出题。
+## 这类问题在编辑器里永远不会出现，只有导出安装后才暴露，
+## 所以必须喊出来，而不是悄悄把游戏结束掉——那样看起来就像「一点开始就结束」。
+signal fatal_error(message: String)
+
 
 var _players: Array = []
 var _scores := {}
 var _cfg := {}
 var _bank: WordBank
+var _bank_path := WordBank.DEFAULT_PATH
 
 var _phase := Phase.IDLE
 var _time_left := 0.0
@@ -121,7 +127,10 @@ func get_config_schema() -> Array:
 func setup(players: Array, cfg: Dictionary) -> void:
 	_players = players.duplicate()
 	_cfg = _merge_defaults(cfg)
-	_bank = WordBank.load_default()
+	# 正常情况下不会指定路径。留这个口子是为了让测试能塞一个不存在的路径，
+	# 验证「读不到词库」时会不会给出明确提示。
+	_bank_path = String(_cfg.get("word_bank_path", WordBank.DEFAULT_PATH))
+	_bank = WordBank.load_from(_bank_path)
 
 	_scores.clear()
 	for p in _players:
@@ -136,7 +145,9 @@ func setup(players: Array, cfg: Dictionary) -> void:
 	_time_left = 0.0
 
 	if _bank.total() == 0:
-		push_error("词库是空的，检查 res://data/words/words.csv")
+		push_error("词库是空的：%s" % _bank_path)
+		fatal_error.emit(
+			tr("读不到词库：%s\n\n如果是导出安装后才出现，检查导出预设的 include_filter 有没有包含 *.txt。") % _bank_path)
 
 
 func start_round() -> void:
@@ -154,6 +165,7 @@ func start_round() -> void:
 	_candidates = _bank.pick(difficulty, CANDIDATE_COUNT, _used_words)
 	if _candidates.is_empty():
 		push_error("词库抽不出题，检查难度 %d 的可用词量" % difficulty)
+		fatal_error.emit(tr("词库抽不出题：%s 里没有可用的词条。") % _bank_path)
 		_finish()
 		return
 

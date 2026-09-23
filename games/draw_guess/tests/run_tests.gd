@@ -7,6 +7,7 @@ extends SceneTree
 var _passed := 0
 var _failed := 0
 var _forwarded: Array = []
+var _fatal_messages: Array = []
 
 
 func _initialize() -> void:
@@ -21,6 +22,7 @@ func _initialize() -> void:
 	_test_stroke_authority()
 	_test_timeouts()
 	_test_drawer_leaves()
+	_test_missing_word_bank()
 	_finish()
 
 
@@ -312,6 +314,30 @@ func _test_drawer_leaves() -> void:
 	game.on_player_left(int(game.get_players()[0]["peer_id"]))
 	game.on_player_left(int(game.get_players()[0]["peer_id"]))
 	_check("人数不足即结束", game.is_finished())
+	game.free()
+
+
+# ---------------------------------------------------------------- 致命错误
+
+func _test_missing_word_bank() -> void:
+	print("\n-- 词库读不到时必须报错，不能静默结束 --")
+	var game := DrawGuessGame.new()
+	_fatal_messages.clear()
+	game.fatal_error.connect(func(message): _fatal_messages.append(message))
+
+	game.setup(_players(), {"word_bank_path": "res://data/words/__does_not_exist__.txt"})
+	_check("setup 阶段就报错", _fatal_messages.size() == 1, "%d 条" % _fatal_messages.size())
+	if not _fatal_messages.is_empty():
+		var message := String(_fatal_messages[0])
+		_check("错误里给出了具体路径", message.contains("__does_not_exist__"), message)
+		_check("错误里提示了 include_filter", message.contains("include_filter"), message)
+
+	# 就算硬走到 start_round，也只能报错 + 结束，不能装作没事发生
+	_fatal_messages.clear()
+	game.start_round()
+	_check("抽不出题也报错", not _fatal_messages.is_empty())
+	_check("没有进入回合", game.get_phase() == DrawGuessGame.Phase.FINISHED)
+
 	game.free()
 
 

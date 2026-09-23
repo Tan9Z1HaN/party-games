@@ -4,7 +4,9 @@
 # Godot-specific ignores
 .import/
 export.cfg
-export_presets.cfg
+# export_presets.cfg 刻意不忽略：里面的 include_filter 是**功能性**配置，
+# 它决定了非资源文件（比如词库 data/words/words.txt）会不会被打进导出包。
+# 丢了这一行，游戏在编辑器里一切正常，装到手机上一点开始就直接结束。
 
 # Android build artifacts
 android/

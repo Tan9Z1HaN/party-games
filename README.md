@@ -65,6 +65,43 @@ Godot 没有跑起来时容易撞上一个坑：如果 `%APPDATA%\Godot` 不可�
 引擎在创建 `user://logs` 失败后会直接崩溃（访问违例）。
 正常情况下不会遇到，受限环境里把 `APPDATA` / `LOCALAPPDATA` 指到可写目录即可。
 
+## 导出到手机
+
+导出预设是 `export_presets.cfg`，**已纳入版本控制**（通常 Godot 项目会忽略它，
+但这里不能忽略，原因见下）。
+
+其中这一行是**功能性的，不是可选填项**：
+
+```
+include_filter="*.txt,*.json"
+```
+
+词库是 `data/words/words.txt`。**Godot 不把 `.txt` 当资源**，
+只有匹配 `include_filter` 的非资源文件才会被打进导出包。
+少了这一行会出现一个非常迷惑的现象：
+
+> 编辑器里跑一切正常，装到手机上一点「开始游戏」**就直接跳到结算**。
+
+因为游戏读不到词库，抽不出题，只能立刻收场。而日志在手机上你也看不到。
+现在这种情况下游戏会显示一个明确的出错页，而不是假装没事地结束。
+
+`tools/run_tests.ps1` 里有一条专门盯这个的检查，改预设时别绕过它。
+
+### Android 快速流程
+
+```powershell
+# 1. 连模拟器（MuMu 的 adb 端口，实例 0 是 16384）
+adb connect 127.0.0.1:16384
+
+# 2. 导出
+cd 'D:\Godot Progame\party-games'
+& 'D:\Godot Progame\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe' `
+    --headless --export-debug "Android" 'build\partygames.apk'
+
+# 3. 装上去（或者直接把 APK 拖进模拟器窗口）
+adb install -r 'build\partygames.apk'
+```
+
 ## 目录结构
 
 ```

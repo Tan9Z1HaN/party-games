@@ -45,6 +45,7 @@ func _run() -> void:
 	_test_typing_guess()
 	_test_marking_guessed()
 	_test_finish_and_restart()
+	_test_fatal_error_screen()
 
 	_finish()
 
@@ -200,6 +201,19 @@ func _test_finish_and_restart() -> void:
 
 	_scene._show_setup()
 	_check("回到设置界面", _scene._setup_panel.visible and _scene._game == null)
+
+
+func _test_fatal_error_screen() -> void:
+	print("\n-- 出错页 --")
+	_scene._on_fatal_error("测试用的错误信息")
+	_check("出错页显示", _scene._error_panel.visible)
+	_check("设置页隐藏", not _scene._setup_panel.visible)
+	_check("游戏区隐藏", not _scene._play_area.visible)
+	_check("错误文案写进去了", _scene._error_label.text.contains("测试"),
+		_scene._error_label.text)
+
+	_scene._show_setup()
+	_check("返回后回到设置页", _scene._setup_panel.visible and not _scene._error_panel.visible)
 
 
 func _check(label: String, condition: bool, detail: String = "") -> void:

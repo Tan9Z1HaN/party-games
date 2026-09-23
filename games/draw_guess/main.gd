@@ -39,6 +39,7 @@ var _pass_panel: PanelContainer
 var _choose_panel: PanelContainer
 var _result_panel: PanelContainer
 var _final_panel: PanelContainer
+var _error_panel: PanelContainer
 
 var _round_label: Label
 var _timer_label: Label
@@ -61,6 +62,11 @@ var _pass_label: Label
 var _result_title: Label
 var _result_rows: VBoxContainer
 var _final_rows: VBoxContainer
+var _error_label: Label
+
+## 非空时整个界面切成错误页。开局条件不满足时用它把原因摆到脸上，
+## 而不是让游戏「一点开始就结束」。
+var _fatal_message := ""
 
 
 func _ready() -> void:
@@ -322,6 +328,21 @@ func _build_overlays() -> void:
 	final_box.add_child(again)
 	_final_panel.add_child(final_box)
 
+	_error_panel = _panel()
+	_error_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_error_panel)
+	var error_box := VBoxContainer.new()
+	error_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	error_box.add_theme_constant_override("separation", 24)
+	error_box.add_child(_label(tr("没法开始游戏"), 44))
+	_error_label = _label("", 26)
+	_error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	error_box.add_child(_error_label)
+	var back := _button(tr("返回"), 30)
+	back.pressed.connect(_show_setup)
+	error_box.add_child(back)
+	_error_panel.add_child(error_box)
+
 
 func _build_setup_panel() -> void:
 	var box := VBoxContainer.new()
@@ -385,6 +406,8 @@ func _show_setup() -> void:
 	_choose_panel.visible = false
 	_pass_panel.visible = false
 	_setup_panel.visible = true
+	_error_panel.visible = false
+	_fatal_message = ""
 
 
 func _start_game() -> void:
@@ -393,6 +416,7 @@ func _start_game() -> void:
 
 	_game = DrawGuessGame.new()
 	add_child(_game)
+	_fatal_message = ""
 	_game.phase_changed.connect(_on_phase_changed)
 	_game.round_started.connect(_on_round_started)
 	_game.candidates_offered.connect(_on_candidates)
@@ -400,6 +424,7 @@ func _start_game() -> void:
 	_game.someone_guessed.connect(_on_someone_guessed)
 	_game.round_settled.connect(_on_round_settled)
 	_game.game_finished.connect(_on_game_finished)
+	_game.fatal_error.connect(_on_fatal_error)
 
 	var count := _player_count.get_selected_id()
 	var players: Array = []
@@ -483,11 +508,27 @@ func _on_game_finished() -> void:
 		rank += 1
 
 
+func _on_fatal_error(message: String) -> void:
+	_fatal_message = message
+	_error_label.text = message
+	_refresh()
+
+
 # ------------------------------------------------------------------ 刷新
 
 func _refresh() -> void:
+	if not _fatal_message.is_empty():
+		_play_area.visible = false
+		_setup_panel.visible = false
+		_pass_panel.visible = false
+		_choose_panel.visible = false
+		_result_panel.visible = false
+		_final_panel.visible = false
+		_error_panel.visible = true
+		return
 	if _game == null:
 		return
+	_error_panel.visible = false
 	var phase := _game.get_phase()
 	_play_area.visible = phase != DrawGuessGame.Phase.IDLE
 	_setup_panel.visible = phase == DrawGuessGame.Phase.IDLE
