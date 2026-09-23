@@ -50,6 +50,8 @@ var _choose_box: HBoxContainer
 var _color_grid: GridContainer
 var _toolbar: HBoxContainer
 var _width_slider: HSlider
+var _width_label: Label
+var _picker: HsvPicker
 var _guesser_grid: GridContainer
 var _guess_target: OptionButton
 var _guess_input: LineEdit
@@ -173,15 +175,27 @@ func _build_toolbar() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 
+	var left := VBoxContainer.new()
+	left.add_theme_constant_override("separation", 8)
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	# 常用色快选（黑白灰一行），剩下的交给下面的取色器
 	_color_grid = GridContainer.new()
-	_color_grid.columns = 8
+	_color_grid.columns = 6
 	_color_grid.add_theme_constant_override("h_separation", 6)
 	_color_grid.add_theme_constant_override("v_separation", 6)
-	row.add_child(_color_grid)
+	left.add_child(_color_grid)
+
+	# 色相带 + 饱和度/明度方块，颜色随便挑
+	_picker = HsvPicker.new()
+	_picker.color_changed.connect(_on_color_picked)
+	left.add_child(_picker)
+	row.add_child(left)
 
 	var tools := VBoxContainer.new()
 	tools.add_theme_constant_override("separation", 6)
-	tools.add_child(_label(tr("粗细"), 22))
+	_width_label = _label("", 24)
+	tools.add_child(_width_label)
 	# 无极调节。以前是三档按钮，画细节和涂大面积之间没有过渡。
 	_width_slider = HSlider.new()
 	_width_slider.min_value = 0
@@ -190,13 +204,16 @@ func _build_toolbar() -> Control:
 	_width_slider.value = DrawPalette.DEFAULT_WIDTH_Q
 	_width_slider.custom_minimum_size = Vector2(240, 48)
 	_width_slider.value_changed.connect(func(v): _board.set_width_level(int(v)))
+	_width_slider.value_changed.connect(func(_v): _update_width_label())
 	tools.add_child(_width_slider)
 	row.add_child(tools)
 
 	var actions := VBoxContainer.new()
 	actions.add_theme_constant_override("separation", 4)
 	var eraser := _button(tr("橡皮"), 22)
-	eraser.pressed.connect(func(): _board.set_tool(DrawBoard.Tool.ERASER))
+	eraser.pressed.connect(func():
+		_board.set_tool(DrawBoard.Tool.ERASER)
+		_sync_width_slider())
 	actions.add_child(eraser)
 	var undo := _button(tr("撤销"), 22)
 	undo.pressed.connect(func(): _board.undo_last_stroke())
@@ -211,12 +228,32 @@ func _build_toolbar() -> Control:
 	return row
 
 
+func _on_color_picked(color: Color) -> void:
+	_board.set_color(color)
+	_board.set_tool(DrawBoard.Tool.PEN)
+	_sync_width_slider()
+
+
+## 笔和橡皮各有一份宽度，切换工具时把滑杆拉回当前工具的值。
+func _sync_width_slider() -> void:
+	_width_slider.set_value_no_signal(_board.get_width_level())
+	_update_width_label()
+
+
+func _update_width_label() -> void:
+	var eraser := _board.get_tool() == DrawBoard.Tool.ERASER
+	var px := DrawPalette.width_px(_board.get_width_level(), 1080.0, eraser)
+	_width_label.text = tr("%s %d px") % [tr("橡皮") if eraser else tr("粗细"), int(round(px))]
+
+
 func _rebuild_palette() -> void:
 	_clear(_color_grid)
 	var selected := _board.get_color()
-	for color in DrawPalette.swatches():
+	# 只放常用色做快选。全部 42 色排出来要占四五行，画板就没地方了。
+	for i in mini(6, DrawPalette.swatches().size()):
+		var color: Color = DrawPalette.swatches()[i]
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(56, 56)
+		b.custom_minimum_size = Vector2(48, 48)
 		# 千万不要设 flat = true：那会让 Button 不画 normal 样式框，
 		# 而色块正是靠 normal 样式框上色的，结果就是整整一排透明方块。
 		var normal := StyleBoxFlat.new()
@@ -239,8 +276,10 @@ func _rebuild_palette() -> void:
 		b.add_theme_stylebox_override("pressed", hover)
 		b.pressed.connect(func():
 			_board.set_color(color)
+			_board.set_tool(DrawBoard.Tool.PEN)
 			_rebuild_palette())
 		_color_grid.add_child(b)
+	_update_width_label()
 
 
 func _build_guesser_panel() -> Control:
@@ -256,20 +295,25 @@ func _build_guess_row() -> Control:
 	row.add_theme_constant_override("separation", 8)
 
 	_guess_target = OptionButton.new()
-	_guess_target.custom_minimum_size = Vector2(180, 0)
+	_guess_target.custom_minimum_size = Vector2(0, 80)
+	_guess_target.add_theme_font_size_override("font_size", 34)
 	row.add_child(_guess_target)
 
 	_guess_input = LineEdit.new()
 	_guess_input.placeholder_text = tr("输入猜测")
+	# 之前这个框小得像辅助输入，实际用起来是玩家全程盯着的唯一控件，得给够。
+	_guess_input.add_theme_font_size_override("font_size", 44)
+	_guess_input.custom_minimum_size = Vector2(0, 88)
 	_guess_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_guess_input.text_submitted.connect(func(_t): _submit_guess())
 	row.add_child(_guess_input)
 
-	var submit := _button(tr("提交"), 24)
+	var submit := _button(tr("提交"), 40)
+	submit.custom_minimum_size = Vector2(0, 88)
 	submit.pressed.connect(_submit_guess)
 	row.add_child(submit)
 
-	_feedback_label = _label("", 24)
+	_feedback_label = _label("", 32)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 4)

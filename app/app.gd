@@ -61,21 +61,21 @@ func _build_menu() -> void:
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 16)
 
-	box.add_child(LightTheme.label(tr("聚会游戏"), 84))
-	box.add_child(LightTheme.label(tr("同一 Wi-Fi 或手机热点下，各自拿手机玩"), 36))
+	box.add_child(LightTheme.label(tr("聚会游戏"), 112))
+	box.add_child(LightTheme.label(tr("同一 Wi-Fi 或手机热点下，各自拿手机玩"), 40))
 
-	box.add_child(LightTheme.label(tr("你的昵称"), 36))
+	box.add_child(LightTheme.label(tr("你的昵称"), 42))
 	_nickname = LineEdit.new()
 	_nickname.text = "玩家"
 	_nickname.custom_minimum_size = Vector2(0, 64)
 	box.add_child(_nickname)
 
-	box.add_child(LightTheme.label(tr("创建房间"), 36))
-	var host_button := LightTheme.button(tr("我是房主，建房"), 42)
+	box.add_child(LightTheme.label(tr("创建房间"), 42))
+	var host_button := LightTheme.button(tr("我是房主，建房"), 52)
 	host_button.pressed.connect(_on_host_pressed)
 	box.add_child(host_button)
 
-	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 36))
+	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 42))
 	var address_row := HBoxContainer.new()
 	address_row.add_theme_constant_override("separation", 10)
 	_ip = LineEdit.new()
@@ -89,7 +89,7 @@ func _build_menu() -> void:
 	address_row.add_child(_port)
 	box.add_child(address_row)
 
-	var join_button := LightTheme.button(tr("加入"), 42)
+	var join_button := LightTheme.button(tr("加入"), 52)
 	join_button.pressed.connect(_on_join_pressed)
 	box.add_child(join_button)
 

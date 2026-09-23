@@ -46,7 +46,10 @@ var background_color: Color = Color.WHITE
 
 var _tool: Tool = Tool.PEN
 var _color: Color = Color(0.1, 0.1, 0.12)
-var _width_q: int = DrawPalette.DEFAULT_WIDTH_Q
+## 笔和橡皮各存一份宽度：切回来的时候还是自己调好的那个值，
+## 而且两者的量程不一样（橡皮粗得多）。
+var _pen_width_q: int = DrawPalette.DEFAULT_WIDTH_Q
+var _eraser_width_q: int = DrawPalette.DEFAULT_ERASER_Q
 var _drawing_enabled := false
 
 ## 已完成的笔迹：[{ id, color: Color, width_q:int, eraser:bool, points }]
@@ -106,7 +109,8 @@ func _draw_stroke(stroke: Dictionary, board_size: Vector2) -> void:
 		return
 
 	var color: Color = background_color if bool(stroke.get("eraser", false)) else stroke["color"]
-	var width := DrawPalette.width_px(int(stroke["width_q"]), board_size.x)
+	var width := DrawPalette.width_px(
+		int(stroke["width_q"]), board_size.x, bool(stroke.get("eraser", false)))
 
 	if points.size() == 1:
 		draw_circle(from_board(Vector2i(points[0]), board_size), width * 0.5, color)
@@ -159,8 +163,8 @@ func _begin_stroke(local_pos: Vector2) -> void:
 	_active_id = _next_stroke_id
 	_next_stroke_id = (_next_stroke_id % 0xFFFF) + 1
 	_active_color = _color
-	_active_width = _width_q
 	_active_eraser = _tool == Tool.ERASER
+	_active_width = get_width_level()
 
 	var p := to_board(local_pos, size)
 	_last_point = p
@@ -284,12 +288,17 @@ func get_color() -> Color:
 
 
 ## 笔宽，0 ~ DrawPalette.WIDTH_STEPS-1 的量化值。无极调节。
+## 改的是**当前工具**的宽度。
 func set_width_level(quantized: int) -> void:
-	_width_q = clampi(quantized, 0, DrawPalette.WIDTH_STEPS - 1)
+	var value := clampi(quantized, 0, DrawPalette.WIDTH_STEPS - 1)
+	if _tool == Tool.ERASER:
+		_eraser_width_q = value
+	else:
+		_pen_width_q = value
 
 
 func get_width_level() -> int:
-	return _width_q
+	return _eraser_width_q if _tool == Tool.ERASER else _pen_width_q
 
 
 ## 应用一段远端笔迹。非法数据静默丢弃，不要崩溃。
