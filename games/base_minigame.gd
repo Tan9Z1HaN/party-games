@@ -82,6 +82,23 @@ func on_player_input(peer_id: int, payload: PackedByteArray) -> void:
 	pass
 
 
+## 权威端的状态快照，房间层会定期广播给所有人。
+## 客户端靠它校准倒计时之类的本地表现。返回空字典表示不需要同步。
+func snapshot() -> Dictionary:
+	return {}
+
+
+## 收到权威端广播来的报文。**只在客户端调用**，权威端不会收到。
+## 只更新表现，不要在这里做任何判定。
+func on_remote_message(payload: PackedByteArray) -> void:
+	pass
+
+
+## 收到权威端广播的状态快照。客户端用它把本地表现拉回正确值。
+func apply_snapshot(snapshot: Dictionary) -> void:
+	pass
+
+
 func on_player_disconnected(peer_id: int) -> void:
 	## 玩家断线但尚未离开房间。默认什么都不做，由子类的超时逻辑兜底。
 	pass

@@ -1,21 +1,27 @@
 class_name Protocol
 extends RefCounted
 
-## 报文与通道定义（冻结契约，勿改）。
+## 报文与通道定义（冻结契约，勿改已有内容）。
 ##
 ## 两条硬性设计约束：
 ##
-## 1. 所有 RPC 都挂在同一个固定节点路径上。Godot 的 RPC 依赖 NodePath 在两端一致，
+## 1. 所有 RPC 都挂在固定节点路径上。Godot 的 RPC 依赖 NodePath 在两端一致，
 ##    不一致时会**静默失败**（不报错，只是收不到），是本项目最难排查的一类 bug。
+##    两端加载的是同一套场景，所以路径天然一致——但别在运行期动态改变节点树形状。
 ##
 ## 2. 框架占用 0x01 ~ 0x1F，小游戏从 GAME_MSG 开始自定编号。
 ##    小游戏在游戏未开始时不得发送自己的报文。
 
 ## 协议版本。握手时双方必须一致，否则拒绝连接。
+## 任何会影响两端兼容性的改动都要把它 +1。
 const VERSION := 1
 
-## RPC 挂载点的固定路径，两端必须完全一致。
+## 房间控制器的 RPC 挂载点，两端必须完全一致。
 const ROOM_RPC_PATH := ^"/root/Main/Room"
+
+## 连接层（Transport）也带自己的 RPC（只用来测延迟），
+## 它是 Room 的子节点，两端路径同样一致。
+const TRANSPORT_RPC_PATH := ^"/root/Main/Room/Transport"
 
 ## 传输通道
 const CH_RELIABLE := 0    ## 可靠有序：状态变更、指令
@@ -26,19 +32,24 @@ const CH_UNRELIABLE := 1  ## 不可靠：高频笔迹、心跳
 const CONNECT_TIMEOUT := 5.0
 
 ## 端口。主机端口被占用时按 PORT_STEP 递增重试，最多 PORT_RETRIES 次。
-## 实际使用的端口要写进二维码，客户端不需要知道默认值。
+## 实际使用的端口要写进邀请信息，客户端不需要知道默认值。
 const GAME_PORT := 8910
 const PORT_STEP := 2
 const PORT_RETRIES := 4
 const DISCOVERY_PORT := 8911
 
-## 心跳间隔（秒）与超时判定阈值
+## 心跳间隔（秒）
 const PING_INTERVAL := 1.0
-const PING_TIMEOUT := 8.0
+
+## 一局最多几个人。房间满员判定和 UI 都用它。
+const MAX_PLAYERS := 8
+
+## 昵称长度上限（字符）
+const MAX_NAME_CHARS := 8
 
 ## 框架消息类型
 enum Msg {
-	HELLO = 0x01,          ## 客户端 -> 主机：握手（协议版本、昵称、头像）
+	HELLO = 0x01,          ## 客户端 -> 主机：握手（协议版本、昵称）
 	HELLO_ACK = 0x02,      ## 主机 -> 客户端：握手确认（分配的 peer_id、房间快照）
 	REFUSE = 0x03,         ## 主机 -> 客户端：拒绝连接
 	PLAYER_JOINED = 0x04,
@@ -59,8 +70,7 @@ enum Refuse {
 	GAME_IN_PROGRESS = 3,
 }
 
-## 邀请链接 / 二维码的 scheme。
-## 客户端用系统相机扫到后按此格式唤起 App，从而绕开 UDP 广播发现。
+## 邀请串的 scheme。客户端扫码/粘贴后按此格式解析。
 const URI_SCHEME := "godotlan"
 
 
