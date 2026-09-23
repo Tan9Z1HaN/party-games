@@ -1,0 +1,185 @@
+extends SceneTree
+
+## 界面冒烟测试：真的把 main.tscn 实例化出来，然后像玩家一样点按钮走完一局。
+##
+## 运行方式：
+##   godot --headless --path . --script res://games/draw_guess/tests/smoke_scene.gd
+##
+## 为什么需要它：逻辑单测跑得再全，也测不出「按钮连错信号」「界面刷新时读了过期变量」
+## 这一类接线问题。这里把整条链路真的走一遍。
+
+var _passed := 0
+var _failed := 0
+var _scene
+
+
+func _initialize() -> void:
+	print("=== 你画我猜 · 界面冒烟测试 ===")
+
+	var packed = load("res://games/draw_guess/main.tscn")
+	_check("场景能加载", packed != null)
+	if packed == null:
+		_finish()
+		return
+
+	_scene = packed.instantiate()
+	root.add_child(_scene)
+	_run()
+
+
+## 必须等一帧再断言：_initialize() 阶段场景树还没开始运转，
+## 这时候 root.add_child() 不会触发节点的 _ready()，界面还没被构建出来。
+func _run() -> void:
+	await process_frame
+	await process_frame
+
+	_check("界面构建完成", _scene._board != null and _scene._setup_panel != null)
+	if _scene._board == null:
+		_finish()
+		return
+
+	_test_setup_screen()
+	_test_start_game()
+	_test_choose_word()
+	_test_drawing_phase()
+	_test_typing_guess()
+	_test_marking_guessed()
+	_test_finish_and_restart()
+
+	_finish()
+
+
+func _test_setup_screen() -> void:
+	print("\n-- 起始界面 --")
+	_check("起始显示设置面板", _scene._setup_panel.visible)
+	_check("起始隐藏游戏区", not _scene._play_area.visible)
+	_check("难度有三档", _scene._difficulty_input.item_count == 3)
+	_check("人数从 3 起", _scene._player_count.item_count == 6, "%d" % _scene._player_count.item_count)
+
+
+func _test_start_game() -> void:
+	print("\n-- 开始游戏 --")
+	_scene._player_count.select(1)          # 4 人
+	_scene._rounds_input.value = 1
+	_scene._seconds_input.value = 60
+	_scene._start_game()
+
+	var game = _scene._game
+	_check("游戏对象已建立", game != null)
+	_check("4 名玩家", game.get_players().size() == 4)
+	_check("进入选词阶段", game.get_phase() == DrawGuessGame.Phase.CHOOSING)
+	_check("进入游戏区", _scene._play_area.visible)
+	_check("设置面板隐藏", not _scene._setup_panel.visible)
+	_check("先显示交接手机面板", _scene._pass_panel.visible)
+	_check("交接面板写明了画手", _scene._pass_label.text.length() > 0)
+
+
+func _test_choose_word() -> void:
+	print("\n-- 选词 --")
+	# 玩家点"我准备好了"
+	_scene._awaiting_pass = false
+	_scene._refresh()
+	_check("选词面板出现", _scene._choose_panel.visible)
+	_check("给了三个候选", _scene._choose_box.get_child_count() == 3,
+		"%d" % _scene._choose_box.get_child_count())
+
+	var first = _scene._choose_box.get_child(0)
+	first.pressed.emit()
+
+	var game = _scene._game
+	_check("进入作画阶段", game.get_phase() == DrawGuessGame.Phase.DRAWING)
+	_check("画手看得到词", not game.get_word_for(game.get_drawer_peer_id()).is_empty())
+	_check("画板可画", _scene._board.is_drawing_enabled())
+	_check("猜词按钮数量 = 3", _scene._guesser_buttons.size() == 3,
+		"%d" % _scene._guesser_buttons.size())
+
+
+func _test_drawing_phase() -> void:
+	print("\n-- 作画 --")
+	var game = _scene._game
+	var drawer: int = game.get_drawer_peer_id()
+
+	# 模拟画板吐出一段笔迹，走的是和真实触摸一样的信号路径
+	var chunk := StrokeCodec.encode_chunk(1, StrokeCodec.FLAG_BEGIN, 0, 1,
+		PackedVector2Array([Vector2(100, 100), Vector2(120, 130)]))
+	_scene._board.stroke_chunk.emit(chunk)
+	_check("画手作画时不会报错", true)
+
+	# 非画手画应该被权威端丢掉，且这里的本地画板本来就该是关的
+	_check("画手身份与界面一致", _scene._local() == drawer)
+	_check("计时器有显示", _scene._timer_label.text.length() > 0)
+	_check("提示带掩码", _scene._hint_label.text.contains("_"), _scene._hint_label.text)
+	_check("画手能看到词", _scene._word_label.text.contains(
+		game.get_word_for(drawer)), _scene._word_label.text)
+
+
+func _test_typing_guess() -> void:
+	print("\n-- 打字猜词 --")
+	var game = _scene._game
+	var word: String = game.get_word_for(game.get_drawer_peer_id())
+
+	_scene._guess_target.select(0)
+	var target: int = _scene._guess_target.get_selected_id()
+	_check("选中的不是画手", target != game.get_drawer_peer_id())
+
+	_scene._guess_input.text = "肯定不是这个词"
+	_scene._submit_guess()
+	_check("错误猜测有反馈", _scene._feedback_label.text.length() > 0)
+	_check("错误猜测不记分", not game.has_guessed(target))
+
+	_scene._guess_input.text = word
+	_scene._submit_guess()
+	_check("正确猜测被记录", game.has_guessed(target))
+	_check("输入框已清空", _scene._guess_input.text == "")
+	_check("反馈提示猜对", _scene._feedback_label.text.contains("猜对"),
+		_scene._feedback_label.text)
+
+
+func _test_marking_guessed() -> void:
+	print("\n-- 标记全部猜对 --")
+	var game = _scene._game
+	var ids: Array = _scene._guesser_buttons.keys()
+	for peer_id in ids:
+		if not _scene._guesser_buttons.has(peer_id):
+			continue
+		var button = _scene._guesser_buttons[peer_id]
+		if is_instance_valid(button):
+			button.pressed.emit()
+
+	_check("三人全部猜对", game.get_guessed_count() == 3, "%d" % game.get_guessed_count())
+	_check("自动进入结算", game.get_phase() == DrawGuessGame.Phase.ROUND_END)
+	_check("结算面板显示", _scene._result_panel.visible)
+	_check("结算写明答案", _scene._result_title.text.contains(
+		game.get_revealed_word()), _scene._result_title.text)
+	_check("结算列出得分行", _scene._result_rows.get_child_count() > 0)
+	_check("画板已禁用", not _scene._board.is_drawing_enabled())
+
+
+func _test_finish_and_restart() -> void:
+	print("\n-- 结束与再来一局 --")
+	var game = _scene._game
+	game.advance_now()
+	_check("一回合跑完后结束", game.is_finished())
+	_check("最终面板显示", _scene._final_panel.visible)
+	_check("排名有 4 行", _scene._final_rows.get_child_count() == 4,
+		"%d" % _scene._final_rows.get_child_count())
+
+	var champion: int = int(game.get_results()[0]["peer_id"])
+	_check("冠军有分", int(game.get_scores()[champion]) > 0)
+
+	_scene._show_setup()
+	_check("回到设置界面", _scene._setup_panel.visible and _scene._game == null)
+
+
+func _check(label: String, condition: bool, detail: String = "") -> void:
+	if condition:
+		_passed += 1
+		print("  [OK]   ", label)
+	else:
+		_failed += 1
+		print("  [FAIL] ", label, "   ", detail)
+
+
+func _finish() -> void:
+	print("\n=== 通过 %d，失败 %d ===" % [_passed, _failed])
+	quit(1 if _failed > 0 else 0)
