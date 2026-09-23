@@ -341,11 +341,14 @@ func get_hint_text() -> String:
 	if _entry.is_empty():
 		return ""
 	var word := String(_entry["word"])
-	var masked := ""
 	var reveal_first := bool(_cfg.get("hints", true)) \
 		and _time_left <= float(_cfg.get("round_seconds", DEFAULT_ROUND_SECONDS)) * 0.5
+	# 下划线之间要留出明显间隙。只用单个空格的话，
+	# 两个下划线仍然会连成一整条横线，玩家数不出这是几个字。
+	var parts := PackedStringArray()
 	for i in word.length():
-		masked += word[i] if (i == 0 and reveal_first) else "_"
+		parts.append(word[i] if (i == 0 and reveal_first) else "_")
+	var masked := "  ".join(parts)
 	return "%s（%d 个字 · %s）" % [masked, word.length(), String(_entry.get("category", ""))]
 
 

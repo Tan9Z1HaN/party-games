@@ -13,6 +13,19 @@ extends Control
 
 const PLAYER_LIMIT := 8
 
+## 界面配色：整体走浅色底 + 黑字。
+## Godot 默认主题是深色的（浅色文字），把浅色文字压在浅色面板上根本读不出来，
+## 而且只改 font_color 不够——hover / pressed / disabled 会各自回落到默认主题的浅色。
+const INK := Color(0.10, 0.11, 0.13)
+const INK_DIM := Color(0.44, 0.47, 0.52)
+const INK_ACCENT := Color(0.09, 0.45, 0.20)
+const BACKDROP := Color(0.90, 0.92, 0.96)
+const SURFACE := Color(1.0, 1.0, 1.0)
+const SURFACE_ALT := Color(0.93, 0.95, 0.99)
+const SURFACE_PRESSED := Color(0.78, 0.85, 0.97)
+const SURFACE_DISABLED := Color(0.88, 0.89, 0.92)
+const FOCUS_RING := Color(0.25, 0.52, 0.95)
+
 var _game: DrawGuessGame
 var _board: DrawBoard
 var _awaiting_pass := false
@@ -40,8 +53,8 @@ var _guess_input: LineEdit
 var _feedback_label: Label
 
 var _player_count: OptionButton
-var _rounds_input: SpinBox
-var _seconds_input: SpinBox
+var _rounds_input: OptionButton
+var _seconds_input: OptionButton
 var _difficulty_input: OptionButton
 
 var _pass_label: Label
@@ -66,12 +79,21 @@ func _process(delta: float) -> void:
 # ------------------------------------------------------------------ 界面搭建
 
 func _build() -> void:
+	theme = _make_light_theme()
+
+	# 铺一层浅色底。默认的清除色是深灰，黑字压上去同样看不清。
+	var backdrop := ColorRect.new()
+	backdrop.color = BACKDROP
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(backdrop)
+
 	var margin := MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 16)
-	margin.add_theme_constant_override("margin_right", 16)
-	margin.add_theme_constant_override("margin_top", 16)
-	margin.add_theme_constant_override("margin_bottom", 16)
+	margin.add_theme_constant_override("margin_left", 36)
+	margin.add_theme_constant_override("margin_right", 36)
+	margin.add_theme_constant_override("margin_top", 36)
+	margin.add_theme_constant_override("margin_bottom", 36)
 	add_child(margin)
 
 	_play_area = VBoxContainer.new()
@@ -123,7 +145,7 @@ func _build_hint_bar() -> Control:
 	box.add_theme_constant_override("separation", 2)
 	_hint_label = _label("", 30)
 	_word_label = _label("", 34)
-	_word_label.add_theme_color_override("font_color", Color(0.2, 0.6, 0.2))
+	_word_label.add_theme_color_override("font_color", INK_ACCENT)
 	box.add_child(_hint_label)
 	box.add_child(_word_label)
 	return box
@@ -166,14 +188,14 @@ func _build_toolbar() -> Control:
 
 
 func _rebuild_palette() -> void:
-	for child in _color_grid.get_children():
-		child.queue_free()
+	_clear(_color_grid)
 	for i in DrawPalette.COLORS.size():
 		var index := i
 		var color: Color = DrawPalette.COLORS[i]
 		var b := Button.new()
 		b.custom_minimum_size = Vector2(52, 52)
-		b.flat = true
+		# 千万不要设 flat = true：那会让 Button 不画 normal 样式框，
+		# 而色块正是靠 normal 样式框上色的，结果就是整整一排透明方块。
 		var normal := StyleBoxFlat.new()
 		normal.bg_color = color
 		normal.set_corner_radius_all(8)
@@ -317,18 +339,21 @@ func _build_setup_panel() -> void:
 	box.add_child(_player_count)
 
 	box.add_child(_label(tr("回合数"), 26))
-	_rounds_input = SpinBox.new()
-	_rounds_input.min_value = 1
-	_rounds_input.max_value = 12
-	_rounds_input.value = 3
+	# 用下拉框而不是 SpinBox：手机上那两个小箭头根本点不准，
+	# 而且 SpinBox 的箭头图标来自默认深色主题，在浅色底上几乎看不见。
+	_rounds_input = OptionButton.new()
+	for n in [1, 2, 3, 4, 5, 6, 8, 10]:
+		_rounds_input.add_item(tr("%d 回合") % n, n)
+	_rounds_input.select(2)
+	_rounds_input.custom_minimum_size = Vector2(0, 64)
 	box.add_child(_rounds_input)
 
 	box.add_child(_label(tr("每回合时长（秒）"), 26))
-	_seconds_input = SpinBox.new()
-	_seconds_input.min_value = 30
-	_seconds_input.max_value = 180
-	_seconds_input.step = 10
-	_seconds_input.value = 80
+	_seconds_input = OptionButton.new()
+	for s in [40, 60, 80, 100, 120, 150]:
+		_seconds_input.add_item(tr("%d 秒") % s, s)
+	_seconds_input.select(2)
+	_seconds_input.custom_minimum_size = Vector2(0, 64)
 	box.add_child(_seconds_input)
 
 	box.add_child(_label(tr("词库难度"), 26))
@@ -382,8 +407,8 @@ func _start_game() -> void:
 		players.append({"peer_id": 100 + i, "name": tr("玩家%d") % (i + 1), "avatar": i})
 
 	_game.setup(players, {
-		"rounds": int(_rounds_input.value),
-		"round_seconds": int(_seconds_input.value),
+		"rounds": _rounds_input.get_selected_id(),
+		"round_seconds": _seconds_input.get_selected_id(),
 		"difficulty": _difficulty_input.get_selected_id(),
 		"hints": true,
 	})
@@ -483,7 +508,7 @@ func _update_live() -> void:
 		return
 	var phase := _game.get_phase()
 	_round_label.text = tr("第 %d/%d 回合") % [
-		maxi(_game.get_round_index(), 1), int(_rounds_input.value)]
+		maxi(_game.get_round_index(), 1), _rounds_input.get_selected_id()]
 
 	if phase == DrawGuessGame.Phase.DRAWING or phase == DrawGuessGame.Phase.CHOOSING:
 		_timer_label.text = "%d" % int(ceil(_game.get_time_left()))
@@ -526,6 +551,7 @@ func _rebuild_guesser_panel() -> void:
 		b.toggle_mode = true
 		b.text = tr("%s 猜对了") % String(p["name"])
 		b.custom_minimum_size = Vector2(0, 64)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.pressed.connect(func():
 			_game.on_player_input(_local(), DrawGuessMessages.encode_mark_correct(peer_id)))
 		_guesser_grid.add_child(b)
@@ -614,10 +640,77 @@ func _local() -> int:
 func _panel() -> PanelContainer:
 	var p := PanelContainer.new()
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.96, 0.97, 1.0)
+	style.bg_color = SURFACE
 	style.set_corner_radius_all(0)
+	# 面板内边距。没有它的话内容会顶到屏幕边缘，正文字符被切、按钮贴边。
+	style.content_margin_left = 44.0
+	style.content_margin_right = 44.0
+	style.content_margin_top = 44.0
+	style.content_margin_bottom = 44.0
 	p.add_theme_stylebox_override("panel", style)
 	return p
+
+
+## 浅色主题。挂在根节点上，整棵界面树都会继承。
+func _make_light_theme() -> Theme:
+	var t := Theme.new()
+
+	# 每个控件类型都有自己的状态色。只设 font_color 的话，
+	# hover / pressed / disabled 会回落到默认主题的浅色，在浅底上直接消失。
+	for tname in ["Label", "Button", "OptionButton", "CheckBox", "CheckButton"]:
+		t.set_color("font_color", tname, INK)
+		t.set_color("font_hover_color", tname, INK)
+		t.set_color("font_pressed_color", tname, INK)
+		t.set_color("font_focus_color", tname, INK)
+		t.set_color("font_disabled_color", tname, INK_DIM)
+
+	t.set_color("font_color", "LineEdit", INK)
+	t.set_color("font_placeholder_color", "LineEdit", INK_DIM)
+	t.set_color("font_selected_color", "LineEdit", Color.WHITE)
+	t.set_color("caret_color", "LineEdit", INK)
+	t.set_color("selection_color", "LineEdit", Color(0.66, 0.79, 0.98))
+
+	# 下拉框弹出来的菜单
+	t.set_color("font_color", "PopupMenu", INK)
+	t.set_color("font_hover_color", "PopupMenu", INK)
+	t.set_color("font_disabled_color", "PopupMenu", INK_DIM)
+	t.set_stylebox("panel", "PopupMenu", _surface_box(SURFACE))
+	t.set_stylebox("hover", "PopupMenu", _surface_box(SURFACE_PRESSED))
+
+	# 按钮底色也要换。默认主题是深灰，黑字压上去比原来还糊。
+	for tname in ["Button", "OptionButton", "CheckBox", "CheckButton"]:
+		t.set_stylebox("normal", tname, _surface_box(SURFACE_ALT))
+		t.set_stylebox("hover", tname, _surface_box(SURFACE))
+		t.set_stylebox("pressed", tname, _surface_box(SURFACE_PRESSED))
+		t.set_stylebox("disabled", tname, _surface_box(SURFACE_DISABLED))
+		t.set_stylebox("focus", tname, _focus_box())
+
+	t.set_stylebox("normal", "LineEdit", _surface_box(SURFACE))
+	t.set_stylebox("focus", "LineEdit", _focus_box())
+
+	return t
+
+
+func _surface_box(color: Color) -> StyleBoxFlat:
+	var box := StyleBoxFlat.new()
+	box.bg_color = color
+	box.set_corner_radius_all(12)
+	box.content_margin_left = 18.0
+	box.content_margin_right = 18.0
+	box.content_margin_top = 10.0
+	box.content_margin_bottom = 10.0
+	return box
+
+
+## 键盘焦点圈。背景全透明，只画一圈边，避免盖住正常状态的底色。
+func _focus_box() -> StyleBoxFlat:
+	var box := _surface_box(Color(1, 1, 1, 0.0))
+	box.border_width_top = 3
+	box.border_width_bottom = 3
+	box.border_width_left = 3
+	box.border_width_right = 3
+	box.border_color = FOCUS_RING
+	return box
 
 
 func _clear(node: Node) -> void:
