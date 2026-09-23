@@ -1,59 +1,56 @@
 class_name DrawPalette
 extends RefCounted
 
-## 调色板与笔宽定义。
+## 调色盘与笔宽。
 ##
-## 颜色一律用**索引**在网络上传输（1 字节），不传 RGBA（4 字节）。
-## 橡皮不用单独的索引，而是把笔画画成背景色。
+## 颜色**不再用调色板索引传输**，而是直接传 RGB：
+## 索引方案要支持丰富配色就得把整张色表在两端保持同步，
+## 加一个颜色都得改协议。反正一个颜色只占 3 字节，而且每条笔迹只传一次。
+##
+## 笔宽改成无极调节：0~255 量化，映射到 WIDTH_MIN_PX~WIDTH_MAX_PX。
+## 数值是「1080 宽画板上的基准像素」，渲染时按画板实际宽度等比缩放，
+## 换机型后线条粗细观感一致。
 
-## 橡皮专用索引。u8 足够，255 不会和 0~15 的真实颜色冲突。
-const ERASER_INDEX := 255
+const WIDTH_MIN_PX := 2.0
+const WIDTH_MAX_PX := 64.0
+const WIDTH_STEPS := 256
 
-## 16 色调色板
-## 注意：这里必须用普通数组字面量，不能用 PackedColorArray(...)。
-## 构造函数调用不是合法的常量表达式，会让 const 解析失败，
-## 引用处以 "Could not resolve external class member" 的形式报错，很难定位。
-const COLORS := [
-	Color(0.106, 0.106, 0.122),  # 0  黑
-	# 1 原本是白色，但画板本身就是白的，白色画笔等于什么都不画。
-	# 换成深藏青，比一个看不见的色块有用得多。
-	Color(0.090, 0.160, 0.350),  # 1  藏青
-	Color(0.898, 0.282, 0.302),  # 2  红
-	Color(0.969, 0.408, 0.031),  # 3  橙
-	Color(1.000, 0.698, 0.141),  # 4  黄
-	Color(0.275, 0.655, 0.345),  # 5  绿
-	Color(0.071, 0.647, 0.580),  # 6  青
-	Color(0.000, 0.569, 1.000),  # 7  蓝
-	Color(0.431, 0.337, 0.812),  # 8  紫
-	Color(0.914, 0.239, 0.510),  # 9  品红
-	Color(0.553, 0.431, 0.388),  # 10 棕
-	Color(0.961, 0.816, 0.773),  # 11 肤色
-	Color(0.620, 0.620, 0.620),  # 12 灰
-	Color(0.294, 0.333, 0.388),  # 13 深灰
-	Color(0.714, 0.890, 0.420),  # 14 草绿
-	Color(0.490, 0.827, 0.988),  # 15 天蓝
-]
+## 默认笔宽，手感上接近「中等偏细」
+const DEFAULT_WIDTH_Q := 34
 
-## 笔宽档位。数值是「1080 宽画板上的基准像素」，渲染时按画板实际宽度等比缩放，
-## 这样换机型后线条粗细的观感是一致的。
-const WIDTH_BASE := [4.0, 12.0, 28.0]
+## 色相分几档。12 档 × 深浅两色 + 灰阶，够用又不至于挑花眼。
+const HUE_STEPS := 12
 
 
-## 取颜色。索引越界自动取模；ERASER_INDEX 返回背景色。
-static func color_of(index: int, background: Color) -> Color:
-	if index == ERASER_INDEX:
-		return background
-	if COLORS.is_empty():
-		return Color.BLACK
-	return COLORS[posmod(index, COLORS.size())]
+## 量化笔宽 -> 像素。board_width 传画板实际宽度。
+static func width_px(width_q: int, board_width: float) -> float:
+	var t := clampf(float(width_q) / float(WIDTH_STEPS - 1), 0.0, 1.0)
+	return lerpf(WIDTH_MIN_PX, WIDTH_MAX_PX, t) * (board_width / 1080.0)
 
 
-## 取笔宽（像素）。level 超出范围会被夹到合法区间。
-static func width_of(level: int, board_width: float) -> float:
-	var base: float = WIDTH_BASE[clampi(level, 0, WIDTH_BASE.size() - 1)]
-	return base * (board_width / 1080.0)
+## 像素 -> 量化笔宽（反向，UI 显示用）
+static func width_q_from_px(px: float, board_width: float) -> int:
+	if board_width <= 0.0:
+		return DEFAULT_WIDTH_Q
+	var base := px * (1080.0 / board_width)
+	var t := inverse_lerp(WIDTH_MIN_PX, WIDTH_MAX_PX, clampf(base, WIDTH_MIN_PX, WIDTH_MAX_PX))
+	return clampi(int(round(t * float(WIDTH_STEPS - 1))), 0, WIDTH_STEPS - 1)
 
 
-## 该索引是否代表橡皮
-static func is_eraser(index: int) -> bool:
-	return index == ERASER_INDEX
+## 整张调色盘。顺序是「先灰阶，再按色相分组」，
+## UI 直接按这个顺序铺格子，换行位置自然好看。
+static func swatches() -> PackedColorArray:
+	var out := PackedColorArray()
+
+	# 灰阶：黑白加上四档灰，画草稿最常用
+	for value in [0.0, 0.22, 0.42, 0.62, 0.82, 1.0]:
+		out.append(Color(value, value, value))
+
+	# 每个色相给「深」「饱和」「浅」三档
+	for i in HUE_STEPS:
+		var hue := float(i) / float(HUE_STEPS)
+		out.append(Color.from_hsv(hue, 0.95, 0.45))
+		out.append(Color.from_hsv(hue, 0.92, 0.78))
+		out.append(Color.from_hsv(hue, 0.40, 1.0))
+
+	return out

@@ -1,7 +1,7 @@
 class_name DrawBoard
 extends Control
 
-## 共享画板（冻结契约，勿改签名）。你画我猜与画猜接龙共用。
+## 共享画板。你画我猜与画猜接龙共用。
 ##
 ## 坐标约定：所有笔迹点一律使用**板面量化坐标**，
 ## 即把画板本地坐标按画板尺寸归一化后乘以 BOARD_MAX。
@@ -12,19 +12,12 @@ extends Control
 ## 广播由房间层订阅 stroke_chunk 信号后完成，本节点不直接碰网络。
 ##
 ## 性能说明：笔迹只存在内存里，靠 _draw() 一次性重绘。
-## Godot 只在 CanvasItem 变脏时才调 _draw()，所以静止的笔迹**不产生每帧开销**，
-## 不需要像 Line2D 方案那样把老笔迹烘焙成纹理。
+## Godot 只在 CanvasItem 变脏时才调 _draw()，所以静止的笔迹**不产生每帧开销**。
 ##
-## 注意：调用方必须保证画板保持固定宽高比（建议 4:3，用 AspectRatioContainer），
+## 注意：调用方必须保证画板保持固定宽高比（4:3，用 AspectRatioContainer），
 ## 否则不同机型的画板形状不同，同一份量化坐标会被拉伸成不同的样子。
 
 const BOARD_MAX := 4095
-const PALETTE_SIZE := 16
-const WIDTH_LEVELS := 3
-
-## 一段笔迹片段最多包含的点数，超过就切包。
-## 每点增量编码后约 2 字节，配合这个上限可把单包控制在几十字节。
-const MAX_POINTS_PER_CHUNK := 16
 
 enum Tool { PEN, ERASER }
 
@@ -38,30 +31,33 @@ signal canvas_cleared()
 const MIN_POINT_DISTANCE := 5.0
 
 ## 单步增量上限。超过就在两点之间插值，保证 i8 增量编码不失真。
-## i8 能表示 -128~127，留点余量取 100。
 const MAX_STEP := 100.0
 
 ## 最长攒多久就把没发出去的点发一段（秒）。
 ## 决定远端看到笔迹"生长"的流畅度，太大就变成一卡一卡的。
 const CHUNK_INTERVAL := 0.05
 
-## 背景色。橡皮并不是真的擦除，而是用背景色画一条线。
+## 一段笔迹片段最多包含的点数
+const MAX_POINTS_PER_CHUNK := 16
+
+## 背景色。橡皮不是真的擦除，而是用背景色画一条线。
 ## 这个取巧在矢量笔迹方案下最省事，代价是之后没法"恢复被擦掉的部分"。
 var background_color: Color = Color.WHITE
 
 var _tool: Tool = Tool.PEN
-var _color_index := 0
-var _width_level := 1
+var _color: Color = Color(0.1, 0.1, 0.12)
+var _width_q: int = DrawPalette.DEFAULT_WIDTH_Q
 var _drawing_enabled := false
 
-## 已完成的笔迹：[{ id, color_index, width_q, points: PackedVector2Array }]
+## 已完成的笔迹：[{ id, color: Color, width_q:int, eraser:bool, points }]
 var _strokes: Array = []
 
 ## 正在画的那一笔
 var _active := false
 var _active_id := 0
-var _active_color := 0
+var _active_color := Color.BLACK
 var _active_width := 0
+var _active_eraser := false
 var _active_points := PackedVector2Array()
 
 ## 已采集但还没发出去的点
@@ -94,16 +90,23 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), background_color, true)
 	var board_size := size
 	for stroke in _strokes:
-		_draw_stroke(stroke["points"], stroke["color_index"], stroke["width_q"], board_size)
+		_draw_stroke(stroke, board_size)
 	if _active:
-		_draw_stroke(_active_points, _active_color, _active_width, board_size)
+		_draw_stroke({
+			"color": _active_color,
+			"width_q": _active_width,
+			"eraser": _active_eraser,
+			"points": _active_points,
+		}, board_size)
 
 
-func _draw_stroke(points: PackedVector2Array, color_index: int, width_q: int, board_size: Vector2) -> void:
+func _draw_stroke(stroke: Dictionary, board_size: Vector2) -> void:
+	var points: PackedVector2Array = stroke["points"]
 	if points.is_empty():
 		return
-	var color := DrawPalette.color_of(color_index, background_color)
-	var width := DrawPalette.width_of(width_q, board_size.x)
+
+	var color: Color = background_color if bool(stroke.get("eraser", false)) else stroke["color"]
+	var width := DrawPalette.width_px(int(stroke["width_q"]), board_size.x)
 
 	if points.size() == 1:
 		draw_circle(from_board(Vector2i(points[0]), board_size), width * 0.5, color)
@@ -126,8 +129,6 @@ func _gui_input(event: InputEvent) -> void:
 	if not _drawing_enabled:
 		return
 
-	# 触屏事件。桌面端因为 project.godot 里开了 emulate_touch_from_mouse，
-	# 鼠标也会被翻译成触摸事件，但两条路都接上更保险。
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			_begin_stroke(event.position)
@@ -157,8 +158,9 @@ func _begin_stroke(local_pos: Vector2) -> void:
 	_active = true
 	_active_id = _next_stroke_id
 	_next_stroke_id = (_next_stroke_id % 0xFFFF) + 1
-	_active_color = DrawPalette.ERASER_INDEX if _tool == Tool.ERASER else _color_index
-	_active_width = _width_level
+	_active_color = _color
+	_active_width = _width_q
+	_active_eraser = _tool == Tool.ERASER
 
 	var p := to_board(local_pos, size)
 	_last_point = p
@@ -207,8 +209,9 @@ func _end_stroke() -> void:
 	if _active_points.size() > 0:
 		_strokes.append({
 			"id": _active_id,
-			"color_index": _active_color,
+			"color": _active_color,
 			"width_q": _active_width,
+			"eraser": _active_eraser,
 			"points": _active_points,
 		})
 
@@ -217,34 +220,37 @@ func _end_stroke() -> void:
 	queue_redraw()
 
 
-## 把攒着的点发一段出去。
-## is_end 为真时带上 END 标志，告诉远端这一笔收尾了。
+## 把攒着的点发一段出去。is_end 为真时带上 END 标志。
 func _flush(is_end: bool) -> void:
 	if not _active:
 		return
 
 	if _pending.is_empty():
-		# 点已经全部发过了，但还要告诉远端收笔
 		if is_end and _stroke_sent_any:
-			var tail_flags := StrokeCodec.FLAG_END
 			stroke_chunk.emit(StrokeCodec.encode_chunk(
-				_active_id, tail_flags, _active_color, _active_width, PackedVector2Array()))
+				_active_id, _active_flags(0, true), _active_color, _active_width,
+				PackedVector2Array()))
 			_has_pending_chunk = false
 		return
 
-	var flags := 0
-	if not _stroke_sent_any:
-		flags |= StrokeCodec.FLAG_BEGIN
-	if is_end:
-		flags |= StrokeCodec.FLAG_END
-
 	stroke_chunk.emit(StrokeCodec.encode_chunk(
-		_active_id, flags, _active_color, _active_width, _pending))
+		_active_id, _active_flags(0, is_end), _active_color, _active_width, _pending))
 
 	_stroke_sent_any = true
 	_pending = PackedVector2Array()
 	_pending_since = 0.0
 	_has_pending_chunk = false
+
+
+func _active_flags(extra: int, is_end: bool) -> int:
+	var flags := extra
+	if not _stroke_sent_any:
+		flags |= StrokeCodec.FLAG_BEGIN
+	if is_end:
+		flags |= StrokeCodec.FLAG_END
+	if _active_eraser:
+		flags |= StrokeCodec.FLAG_ERASER
+	return flags
 
 
 # ---------------------------------------------------------------- 公开接口
@@ -268,27 +274,25 @@ func get_tool() -> Tool:
 	return _tool
 
 
-## 调色板索引，0 ~ PALETTE_SIZE-1
-func set_color_index(index: int) -> void:
-	_color_index = clampi(index, 0, PALETTE_SIZE - 1)
+func set_color(color: Color) -> void:
+	_color = color
 	_tool = Tool.PEN
 
 
-func get_color_index() -> int:
-	return _color_index
+func get_color() -> Color:
+	return _color
 
 
-## 笔宽档位，0 ~ WIDTH_LEVELS-1
-func set_width_level(level: int) -> void:
-	_width_level = clampi(level, 0, WIDTH_LEVELS - 1)
+## 笔宽，0 ~ DrawPalette.WIDTH_STEPS-1 的量化值。无极调节。
+func set_width_level(quantized: int) -> void:
+	_width_q = clampi(quantized, 0, DrawPalette.WIDTH_STEPS - 1)
 
 
 func get_width_level() -> int:
-	return _width_level
+	return _width_q
 
 
-## 应用一段远端笔迹（主机转发来的）。客户端与主机都调用。
-## 内部做尺寸与格式校验：非法数据静默丢弃，不要崩溃。
+## 应用一段远端笔迹。非法数据静默丢弃，不要崩溃。
 func apply_remote_chunk(chunk: PackedByteArray) -> void:
 	if chunk.size() < StrokeCodec.HEADER_SIZE or chunk.size() > StrokeCodec.MAX_PACKET_BYTES:
 		return
@@ -304,12 +308,10 @@ func clear_canvas() -> void:
 	canvas_cleared.emit()
 
 
-## 撤销最后一笔。
-## 注意：本方法只影响本地表现。要不要把撤销广播出去，由游戏层决定
+## 撤销最后一笔。只影响本地表现；要不要广播由游戏层决定
 ## （直接广播"撤销"在多端会不一致，稳妥做法是清空后重放）。
 func undo_last_stroke() -> void:
 	if _active:
-		# 正在画的这一笔直接作废
 		_active = false
 		_active_points = PackedVector2Array()
 		_pending = PackedVector2Array()
@@ -332,8 +334,10 @@ func serialize_all() -> PackedByteArray:
 	var chunks: Array = []
 	for stroke in _strokes:
 		var flags := StrokeCodec.FLAG_BEGIN | StrokeCodec.FLAG_END
+		if bool(stroke.get("eraser", false)):
+			flags |= StrokeCodec.FLAG_ERASER
 		chunks.append(StrokeCodec.encode_chunk(
-			stroke["id"], flags, stroke["color_index"], stroke["width_q"], stroke["points"]))
+			stroke["id"], flags, stroke["color"], stroke["width_q"], stroke["points"]))
 	return StrokeCodec.encode_batch(chunks)
 
 
@@ -359,12 +363,13 @@ func _ingest(decoded: Dictionary) -> void:
 	if flags & StrokeCodec.FLAG_BEGIN:
 		_strokes.append({
 			"id": id,
-			"color_index": decoded["color_index"],
+			"color": decoded["color"],
 			"width_q": decoded["width_q"],
+			"eraser": bool(flags & StrokeCodec.FLAG_ERASER),
 			"points": points,
 		})
 	elif not points.is_empty():
-		# 续包：先按 id 找到那一条，找不到就丢掉。
+		# 续包：按 id 找那一条，找不到就丢掉。
 		# 凭空出现的续包（比如漏了 BEGIN）不猜，直接忽略更安全。
 		var idx := _find_stroke_index(id)
 		if idx >= 0:

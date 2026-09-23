@@ -20,6 +20,15 @@ const SURFACE_PRESSED := Color(0.78, 0.85, 0.97)
 const SURFACE_DISABLED := Color(0.88, 0.89, 0.92)
 const FOCUS_RING := Color(0.25, 0.52, 0.95)
 
+## 玻璃质感：半透明的白、一圈亮边、一点投影。
+## 底衬是浅色渐变，半透明才看得出来是"玻璃"而不是"白块"。
+const GLASS := Color(1.0, 1.0, 1.0, 0.52)
+const GLASS_HOVER := Color(1.0, 1.0, 1.0, 0.80)
+const GLASS_PRESSED := Color(0.80, 0.88, 1.0, 0.92)
+const GLASS_DISABLED := Color(1.0, 1.0, 1.0, 0.26)
+const GLASS_BORDER := Color(1.0, 1.0, 1.0, 0.90)
+const GLASS_SHADOW := Color(0.12, 0.18, 0.32, 0.18)
+
 
 static func build() -> Theme:
 	var t := Theme.new()
@@ -41,13 +50,13 @@ static func build() -> Theme:
 	t.set_color("font_hover_color", "PopupMenu", INK)
 	t.set_color("font_disabled_color", "PopupMenu", INK_DIM)
 	t.set_stylebox("panel", "PopupMenu", surface_box(SURFACE))
-	t.set_stylebox("hover", "PopupMenu", surface_box(SURFACE_PRESSED))
+	t.set_stylebox("hover", "PopupMenu", surface_box(GLASS_PRESSED))
 
 	for tname in ["Button", "OptionButton", "CheckBox", "CheckButton"]:
-		t.set_stylebox("normal", tname, surface_box(SURFACE_ALT))
-		t.set_stylebox("hover", tname, surface_box(SURFACE))
-		t.set_stylebox("pressed", tname, surface_box(SURFACE_PRESSED))
-		t.set_stylebox("disabled", tname, surface_box(SURFACE_DISABLED))
+		t.set_stylebox("normal", tname, surface_box(GLASS))
+		t.set_stylebox("hover", tname, surface_box(GLASS_HOVER))
+		t.set_stylebox("pressed", tname, surface_box(GLASS_PRESSED))
+		t.set_stylebox("disabled", tname, surface_box(GLASS_DISABLED))
 		t.set_stylebox("focus", tname, focus_box())
 
 	t.set_stylebox("normal", "LineEdit", surface_box(SURFACE))
@@ -59,11 +68,19 @@ static func build() -> Theme:
 static func surface_box(color: Color) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.bg_color = color
-	box.set_corner_radius_all(12)
-	box.content_margin_left = 18.0
-	box.content_margin_right = 18.0
-	box.content_margin_top = 10.0
-	box.content_margin_bottom = 10.0
+	box.set_corner_radius_all(18)
+	box.border_width_top = 2
+	box.border_width_bottom = 2
+	box.border_width_left = 2
+	box.border_width_right = 2
+	box.border_color = GLASS_BORDER
+	box.shadow_color = GLASS_SHADOW
+	box.shadow_size = 6
+	box.shadow_offset = Vector2(0, 3)
+	box.content_margin_left = 22.0
+	box.content_margin_right = 22.0
+	box.content_margin_top = 12.0
+	box.content_margin_bottom = 12.0
 	return box
 
 
@@ -82,7 +99,7 @@ static func focus_box() -> StyleBoxFlat:
 ## 不然内容会顶到屏幕边缘，首字被切、按钮贴边。
 static func panel_style() -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
-	box.bg_color = SURFACE
+	box.bg_color = Color(1.0, 1.0, 1.0, 0.55)
 	box.set_corner_radius_all(0)
 	box.content_margin_left = 44.0
 	box.content_margin_right = 44.0
@@ -106,13 +123,40 @@ static func button(text: String, font_size: int) -> Button:
 	return node
 
 
-## 铺一层浅色底。默认清除色是深灰，黑字压上去同样看不清。
-static func backdrop() -> ColorRect:
-	var rect := ColorRect.new()
-	rect.color = BACKDROP
+## 铺一层浅色渐变底。默认清除色是深灰，黑字压上去看不清；
+## 而且半透明的玻璃按钮需要一层有变化的底衬才像玻璃。
+static func backdrop() -> Control:
+	var rect := TextureRect.new()
 	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rect.stretch_mode = TextureRect.STRETCH_SCALE
+
+	var gradient := Gradient.new()
+	gradient.set_color(0, Color(0.83, 0.89, 1.0))
+	gradient.set_color(1, Color(0.97, 0.89, 0.98))
+
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill_from = Vector2(0.0, 0.0)
+	texture.fill_to = Vector2(1.0, 1.0)
+	texture.width = 256
+	texture.height = 256
+	rect.texture = texture
 	return rect
+
+
+## 切换界面时让面板淡入 + 轻微放大，别硬切。
+static func present(panel: Control, duration := 0.2) -> void:
+	panel.visible = true
+	panel.modulate.a = 0.0
+	panel.pivot_offset = panel.size * 0.5
+	panel.scale = Vector2(0.97, 0.97)
+	var tween := panel.create_tween()
+	tween.set_parallel(true)
+	tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.tween_property(panel, "modulate:a", 1.0, duration)
+	tween.tween_property(panel, "scale", Vector2.ONE, duration)
 
 
 static func clear_children(node: Node) -> void:

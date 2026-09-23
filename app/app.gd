@@ -61,21 +61,21 @@ func _build_menu() -> void:
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 16)
 
-	box.add_child(LightTheme.label(tr("聚会游戏"), 54))
-	box.add_child(LightTheme.label(tr("同一 Wi-Fi 或手机热点下，各自拿手机玩"), 24))
+	box.add_child(LightTheme.label(tr("聚会游戏"), 84))
+	box.add_child(LightTheme.label(tr("同一 Wi-Fi 或手机热点下，各自拿手机玩"), 36))
 
-	box.add_child(LightTheme.label(tr("你的昵称"), 26))
+	box.add_child(LightTheme.label(tr("你的昵称"), 36))
 	_nickname = LineEdit.new()
 	_nickname.text = "玩家"
 	_nickname.custom_minimum_size = Vector2(0, 64)
 	box.add_child(_nickname)
 
-	box.add_child(LightTheme.label(tr("创建房间"), 26))
-	var host_button := LightTheme.button(tr("我是房主，建房"), 32)
+	box.add_child(LightTheme.label(tr("创建房间"), 36))
+	var host_button := LightTheme.button(tr("我是房主，建房"), 42)
 	host_button.pressed.connect(_on_host_pressed)
 	box.add_child(host_button)
 
-	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 26))
+	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 36))
 	var address_row := HBoxContainer.new()
 	address_row.add_theme_constant_override("separation", 10)
 	_ip = LineEdit.new()
@@ -89,11 +89,11 @@ func _build_menu() -> void:
 	address_row.add_child(_port)
 	box.add_child(address_row)
 
-	var join_button := LightTheme.button(tr("加入"), 32)
+	var join_button := LightTheme.button(tr("加入"), 42)
 	join_button.pressed.connect(_on_join_pressed)
 	box.add_child(join_button)
 
-	_menu_status = LightTheme.label("", 24)
+	_menu_status = LightTheme.label("", 30)
 	_menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_menu_status)
 
@@ -110,34 +110,34 @@ func _build_lobby() -> void:
 	box.add_theme_constant_override("separation", 16)
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	_lobby_title = LightTheme.label("", 40)
+	_lobby_title = LightTheme.label("", 56)
 	box.add_child(_lobby_title)
 
-	_lobby_address = LightTheme.label("", 34)
+	_lobby_address = LightTheme.label("", 48)
 	_lobby_address.add_theme_color_override("font_color", LightTheme.INK_ACCENT)
 	box.add_child(_lobby_address)
 
-	var copy := LightTheme.button(tr("复制地址发给朋友"), 28)
+	var copy := LightTheme.button(tr("复制地址发给朋友"), 36)
 	copy.pressed.connect(func():
 		DisplayServer.clipboard_set(_lobby_address.text))
 	box.add_child(copy)
 
-	box.add_child(LightTheme.label(tr("玩家"), 26))
+	box.add_child(LightTheme.label(tr("玩家"), 36))
 	_lobby_players = VBoxContainer.new()
 	_lobby_players.add_theme_constant_override("separation", 6)
 	box.add_child(_lobby_players)
 
-	_lobby_start = LightTheme.button(tr("开始游戏"), 34)
+	_lobby_start = LightTheme.button(tr("开始游戏"), 44)
 	_lobby_start.pressed.connect(_on_start_pressed)
 	box.add_child(_lobby_start)
 
-	var leave := LightTheme.button(tr("离开房间"), 26)
+	var leave := LightTheme.button(tr("离开房间"), 34)
 	leave.pressed.connect(func():
 		_room.leave_room()
 		_show_menu(tr("已离开房间")))
 	box.add_child(leave)
 
-	_lobby_status = LightTheme.label("", 24)
+	_lobby_status = LightTheme.label("", 30)
 	_lobby_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_lobby_status)
 
@@ -153,12 +153,14 @@ func _show_menu(message := "") -> void:
 	_menu.visible = true
 	_lobby.visible = false
 	_menu_status.text = message
+	LightTheme.present(_menu)
 
 
 func _show_lobby() -> void:
 	_menu.visible = false
 	_lobby.visible = true
 	_refresh_lobby()
+	LightTheme.present(_lobby)
 
 
 func _on_host_pressed() -> void:
@@ -243,7 +245,7 @@ func _refresh_lobby() -> void:
 		var ping := _room.transport.get_ping_ms(peer_id)
 		var ping_text := "" if ping < 0 else "   %d ms" % ping
 		_lobby_players.add_child(
-			LightTheme.label("%s%s%s" % [entry["name"], suffix, ping_text], 28))
+			LightTheme.label("%s%s%s" % [entry["name"], suffix, ping_text], 38))
 
 	_lobby_start.visible = is_host
 	_lobby_status.text = tr("把上面的地址告诉朋友，让他们在首页填进去") if is_host else ""

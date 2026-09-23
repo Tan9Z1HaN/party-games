@@ -49,6 +49,7 @@ var _word_label: Label
 var _choose_box: HBoxContainer
 var _color_grid: GridContainer
 var _toolbar: HBoxContainer
+var _width_slider: HSlider
 var _guesser_grid: GridContainer
 var _guess_target: OptionButton
 var _guess_input: LineEdit
@@ -179,12 +180,17 @@ func _build_toolbar() -> Control:
 	row.add_child(_color_grid)
 
 	var tools := VBoxContainer.new()
-	tools.add_theme_constant_override("separation", 4)
-	for i in DrawBoard.WIDTH_LEVELS:
-		var level := i
-		var b := _button(tr("粗细 %d") % (i + 1), 22)
-		b.pressed.connect(func(): _board.set_width_level(level))
-		tools.add_child(b)
+	tools.add_theme_constant_override("separation", 6)
+	tools.add_child(_label(tr("粗细"), 22))
+	# 无极调节。以前是三档按钮，画细节和涂大面积之间没有过渡。
+	_width_slider = HSlider.new()
+	_width_slider.min_value = 0
+	_width_slider.max_value = DrawPalette.WIDTH_STEPS - 1
+	_width_slider.step = 1
+	_width_slider.value = DrawPalette.DEFAULT_WIDTH_Q
+	_width_slider.custom_minimum_size = Vector2(240, 48)
+	_width_slider.value_changed.connect(func(v): _board.set_width_level(int(v)))
+	tools.add_child(_width_slider)
 	row.add_child(tools)
 
 	var actions := VBoxContainer.new()
@@ -207,17 +213,16 @@ func _build_toolbar() -> Control:
 
 func _rebuild_palette() -> void:
 	_clear(_color_grid)
-	for i in DrawPalette.COLORS.size():
-		var index := i
-		var color: Color = DrawPalette.COLORS[i]
+	var selected := _board.get_color()
+	for color in DrawPalette.swatches():
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(52, 52)
+		b.custom_minimum_size = Vector2(56, 56)
 		# 千万不要设 flat = true：那会让 Button 不画 normal 样式框，
 		# 而色块正是靠 normal 样式框上色的，结果就是整整一排透明方块。
 		var normal := StyleBoxFlat.new()
 		normal.bg_color = color
 		normal.set_corner_radius_all(8)
-		if index == _board.get_color_index():
+		if color.is_equal_approx(selected):
 			normal.border_width_top = 4
 			normal.border_width_bottom = 4
 			normal.border_width_left = 4
@@ -233,7 +238,7 @@ func _rebuild_palette() -> void:
 		b.add_theme_stylebox_override("hover", hover)
 		b.add_theme_stylebox_override("pressed", hover)
 		b.pressed.connect(func():
-			_board.set_color_index(index)
+			_board.set_color(color)
 			_rebuild_palette())
 		_color_grid.add_child(b)
 
@@ -461,8 +466,8 @@ func _start_game() -> void:
 	_play_area.visible = true
 	_rebuild_guesser_panel()
 	_rebuild_palette()
-	_board.set_color_index(0)
-	_board.set_width_level(1)
+	_board.set_color(DrawPalette.swatches()[0])
+	_board.set_width_level(DrawPalette.DEFAULT_WIDTH_Q)
 	_board.clear_canvas()
 	_game.start_round()
 	_refresh()
