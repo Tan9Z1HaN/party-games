@@ -6,10 +6,12 @@ extends Control
 ## 联网那条链路全靠它，改动节点树形状会让 RPC 静默失效。
 
 var _room: Room
+var _picker: PanelContainer
 var _menu: PanelContainer
 var _lobby: PanelContainer
 var _game_screen: Control = null
 
+var _menu_game: Label
 var _nickname: LineEdit
 var _ip: LineEdit
 var _port: LineEdit
@@ -21,7 +23,7 @@ var _lobby_players: VBoxContainer
 var _lobby_start: Button
 var _lobby_status: Label
 var _lobby_settings: VBoxContainer
-var _game_picker: OptionButton
+var _lobby_game_label: Label
 var _config_box: VBoxContainer
 
 ## 当前选中的游戏 id。第一个注册的游戏就是默认值。
@@ -46,10 +48,42 @@ func _ready() -> void:
 
 	_build_menu()
 	_build_lobby()
-	_show_menu()
+	_build_picker()
+	_show_picker()
 
 
 # ---------------------------------------------------------------- 界面搭建
+
+## 第一屏：玩什么。游戏是入口级别的选择，不藏在房间里——
+## 你画我猜和 UNO 本来就是两个不同的游戏，混在一个房间配置里只会让人困惑。
+func _build_picker() -> void:
+	_picker = PanelContainer.new()
+	_picker.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_picker.add_theme_stylebox_override("panel", LightTheme.panel_style())
+	add_child(_picker)
+
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 24)
+	box.add_child(LightTheme.label(tr("玩什么"), 96))
+
+	for entry in GamesCatalog.entries():
+		var id := String(entry["id"])
+		var button := LightTheme.button("%s　（%d~%d 人 · 约 %d 分钟）" % [
+			entry["name"], int(entry["min_players"]),
+			int(entry["max_players"]), int(entry["est_minutes"])], 44)
+		button.custom_minimum_size = Vector2(0, 130)
+		button.pressed.connect(func(): _on_game_selected(id))
+		box.add_child(button)
+
+	_picker.add_child(box)
+
+
+func _on_game_selected(id: String) -> void:
+	_selected_game = id
+	_rebuild_config()
+	_show_menu()
+
 
 func _build_menu() -> void:
 	_menu = PanelContainer.new()
@@ -61,7 +95,12 @@ func _build_menu() -> void:
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 16)
 
-	box.add_child(LightTheme.label(tr("聚会游戏"), 112))
+	_menu_game = LightTheme.label("", 96)
+	box.add_child(_menu_game)
+
+	var switch_game := LightTheme.button(tr("换一个游戏"), 30)
+	switch_game.pressed.connect(_show_picker)
+	box.add_child(switch_game)
 
 	box.add_child(LightTheme.label(tr("你的昵称"), 42))
 	_nickname = LineEdit.new()
@@ -134,22 +173,8 @@ func _build_lobby() -> void:
 	_lobby_settings = VBoxContainer.new()
 	_lobby_settings.add_theme_constant_override("separation", 10)
 
-	_lobby_settings.add_child(LightTheme.label(tr("玩什么"), 34))
-
-	_game_picker = OptionButton.new()
-	_game_picker.custom_minimum_size = Vector2(0, 80)
-	_game_picker.add_theme_font_size_override("font_size", 32)
-	for entry in GamesCatalog.entries():
-		_game_picker.add_item("%s（%d~%d 人 · 约 %d 分钟）" % [
-			entry["name"], int(entry["min_players"]),
-			int(entry["max_players"]), int(entry["est_minutes"])])
-		_game_picker.set_item_metadata(_game_picker.item_count - 1, String(entry["id"]))
-		if _selected_game.is_empty():
-			_selected_game = String(entry["id"])
-	if _game_picker.item_count > 0:
-		_game_picker.select(0)
-	_game_picker.item_selected.connect(_on_game_picked)
-	_lobby_settings.add_child(_game_picker)
+	_lobby_game_label = LightTheme.label("", 34)
+	_lobby_settings.add_child(_lobby_game_label)
 
 	_config_box = VBoxContainer.new()
 	_config_box.add_theme_constant_override("separation", 12)
@@ -177,17 +202,15 @@ func _build_lobby() -> void:
 
 # ---------------------------------------------------------------- 流程
 
-func _on_game_picked(index: int) -> void:
-	_selected_game = String(_game_picker.get_item_metadata(index))
-	_rebuild_config()
-	_push_config()
-
-
 ## 按当前游戏的 get_config_schema() 铺一遍配置控件。
 ## 加一款新游戏时这个函数一个字都不用改。
 func _rebuild_config() -> void:
 	LightTheme.clear_children(_config_box)
 	_config_rows.clear()
+	# 还没选游戏时什么都不建。大厅是先于第一屏建好的，
+	# 少了这道守卫，应用一启动就会拿空 id 去查 schema。
+	if _selected_game.is_empty():
+		return
 	for item in GamesCatalog.schema_for(_selected_game):
 		var id := String(item["id"])
 		var caption := LightTheme.label("", 28)
@@ -258,10 +281,25 @@ func _show_menu(message := "") -> void:
 	if _game_screen != null:
 		_game_screen.queue_free()
 		_game_screen = null
-	_menu.visible = true
+	_picker.visible = false
 	_lobby.visible = false
+	_menu.visible = true
+	_menu_game.text = GamesCatalog.display_name(_selected_game)
 	_menu_status.text = message
 	LightTheme.present(_menu)
+
+
+## 回第一屏重选游戏。顺手退掉房间——游戏是入口级选择，
+## 换游戏等于换一局，不能带着旧房间走。
+func _show_picker() -> void:
+	if _game_screen != null:
+		_game_screen.queue_free()
+		_game_screen = null
+	_room.leave_room()
+	_picker.visible = true
+	_menu.visible = false
+	_lobby.visible = false
+	LightTheme.present(_picker)
 
 
 ## 装载对局界面。单机和联机用的是同一个场景：
@@ -298,7 +336,7 @@ func _show_lobby() -> void:
 
 
 func _on_host_pressed() -> void:
-	var port := _room.host_room(_nickname.text, Protocol.MAX_PLAYERS)
+	var port := _room.host_room(_nickname.text, Protocol.MAX_PLAYERS, _selected_game)
 	if port == 0:
 		var code := _room.transport.get_last_host_error()
 		var hint := tr("换个端口再试")
@@ -319,7 +357,7 @@ func _on_join_pressed() -> void:
 		_menu_status.text = tr("先填房主的 IP 地址")
 		return
 	_menu_status.text = tr("正在连接 %s ...") % address
-	_room.join_room(address, int(_port.text), _nickname.text)
+	_room.join_room(address, int(_port.text), _nickname.text, _selected_game)
 
 
 func _on_start_pressed() -> void:
@@ -392,6 +430,8 @@ func _on_refused(reason: int) -> void:
 		Protocol.Refuse.VERSION_MISMATCH: text = tr("对方版本不一致，双方都得是最新版")
 		Protocol.Refuse.ROOM_FULL: text = tr("房间满了")
 		Protocol.Refuse.GAME_IN_PROGRESS: text = tr("对方已经开局了")
+		Protocol.Refuse.GAME_MISMATCH: text = tr(
+			"房主开的不是这款游戏。\n点上面的「换一个游戏」返回重选。")
 		Transport.FailReason.TIMEOUT: text = tr(
 			"连不上（超时）。\n\n" +
 			"1. 确认两台设备在同一个 Wi-Fi 或热点下\n" +
@@ -440,15 +480,17 @@ func _refresh_lobby() -> void:
 			LightTheme.label("%s%s%s" % [entry["name"], suffix, ping_text], 38))
 
 	_lobby_start.visible = is_host
-	# 设置项只有房主能改；其他人看一行摘要就行
-	_lobby_settings.visible = is_host and not bool(state["started"])
+	var game_id := String(state.get("game_id", _selected_game))
+	_lobby_game_label.text = GamesCatalog.display_name(game_id)
+	# 配置只有房主能改；其他人看下面那行摘要就行
+	_config_box.visible = is_host and not bool(state["started"])
 	if is_host:
-		var need := int(GamesCatalog.meta_for(_selected_game).get("min_players", 2))
+		var need := int(GamesCatalog.meta_for(game_id).get("min_players", 2))
 		var missing := need - _room.get_player_count()
 		_lobby_start.disabled = missing > 0
 		if missing > 0:
 			_lobby_status.text = tr("还差 %d 个人才能开始 %s") % [
-				missing, GamesCatalog.display_name(_selected_game)]
+				missing, GamesCatalog.display_name(game_id)]
 		elif _lobby_status.text.is_empty():
 			_lobby_status.text = tr("把上面的地址告诉朋友，让他们在首页填进去")
 	else:

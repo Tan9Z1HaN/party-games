@@ -15,10 +15,12 @@ extends RefCounted
 ## 协议版本。握手时双方必须一致，否则拒绝连接。
 ## 任何会影响两端兼容性的改动都要把它 +1。
 ##
+## 3：握手报文加了游戏 id。房间在建房时就锁定玩什么，
+##    选错游戏的人会被明确拒绝（老客户端发不出这个字段）。
 ## 2：笔迹格式改了（颜色由调色板索引改为 RGB，笔宽由三档改为 0~255 量化）。
 ## 老客户端连上来会被直接拒绝并提示版本不一致——这比「连上了但画出来的
 ## 线粗细颜色全不对」好查得多。
-const VERSION := 2
+const VERSION := 3
 
 ## 房间控制器的 RPC 挂载点，两端必须完全一致。
 const ROOM_RPC_PATH := ^"/root/Main/Room"
@@ -72,6 +74,7 @@ enum Refuse {
 	VERSION_MISMATCH = 1,
 	ROOM_FULL = 2,
 	GAME_IN_PROGRESS = 3,
+	GAME_MISMATCH = 4,   ## 房主开的不是你选的这款游戏
 }
 
 ## 邀请串的 scheme。客户端扫码/粘贴后按此格式解析。

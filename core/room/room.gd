@@ -50,6 +50,8 @@ var transport: Transport
 
 var _mode := Mode.OFFLINE
 var _nickname := ""
+## 客户端想玩的游戏。握手时带给房主做比对。
+var _want_game := ""
 var _max_players := Protocol.MAX_PLAYERS
 var _players := {}                 ## peer_id -> {peer_id, name}
 var _host_id := 0
@@ -91,10 +93,14 @@ func _process(delta: float) -> void:
 # ---------------------------------------------------------------- 对外接口
 
 ## 建房。返回实际监听的端口，0 表示失败。
-func host_room(nickname: String, max_players := Protocol.MAX_PLAYERS) -> int:
+func host_room(nickname: String, max_players := Protocol.MAX_PLAYERS,
+		game_id := "") -> int:
 	leave_room()
 	_nickname = _clean_name(nickname)
 	_max_players = clampi(max_players, 2, Protocol.MAX_PLAYERS)
+	# 房间一建就定下玩什么，之后不能改。游戏是入口级选择，
+	# 半路换游戏等于把所有人的界面都掀了重来。
+	_game_id = game_id
 
 	var port := transport.host(_max_players)
 	if port == 0:
@@ -103,9 +109,10 @@ func host_room(nickname: String, max_players := Protocol.MAX_PLAYERS) -> int:
 
 
 ## 加入别人的房间。结果通过 joined / refused 信号通知。
-func join_room(ip: String, port: int, nickname: String) -> void:
+func join_room(ip: String, port: int, nickname: String, game_id := "") -> void:
 	leave_room()
 	_nickname = _clean_name(nickname)
+	_want_game = game_id
 	_mode = Mode.CLIENT
 	transport.join(ip, port)
 
@@ -225,7 +232,7 @@ func send_game_input(payload: PackedByteArray) -> void:
 # ---------------------------------------------------------------- 握手
 
 @rpc("any_peer", "call_remote", "reliable")
-func rpc_hello(version: int, nickname: String) -> void:
+func rpc_hello(version: int, nickname: String, game_id: String) -> void:
 	if _mode != Mode.HOST:
 		return
 	var sender := multiplayer.get_remote_sender_id()
@@ -234,6 +241,11 @@ func rpc_hello(version: int, nickname: String) -> void:
 
 	if version != Protocol.VERSION:
 		_reject(sender, Protocol.Refuse.VERSION_MISMATCH)
+		return
+	# 选错游戏的人直接拒绝。让人稀里糊涂进了另一个游戏，
+	# 比明确告诉他「房主开的是 X」更糟糕。
+	if not _game_id.is_empty() and not game_id.is_empty() and game_id != _game_id:
+		_reject(sender, Protocol.Refuse.GAME_MISMATCH)
 		return
 	if _players.size() >= _max_players:
 		_reject(sender, Protocol.Refuse.ROOM_FULL)
@@ -327,7 +339,7 @@ func _on_host_started(_port: int) -> void:
 
 func _on_connected() -> void:
 	# 连上了，但还没进房间——先握手
-	rpc_hello.rpc_id(1, Protocol.VERSION, _nickname)
+	rpc_hello.rpc_id(1, Protocol.VERSION, _nickname, _want_game)
 
 
 func _on_connection_failed(reason: int) -> void:
