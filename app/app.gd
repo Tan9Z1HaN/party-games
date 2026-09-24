@@ -52,10 +52,34 @@ func _ready() -> void:
 	_room.state_changed.connect(_on_state_changed)
 	_room.game_started.connect(_on_game_started)
 
+	_fit_window_to_screen()
 	_build_menu()
 	_build_lobby()
 	_build_picker()
 	_show_picker()
+
+
+## 电脑上窗口默认是 540x960。屏幕（或笔记本的小屏）装不下这么高时，
+## 系统会把窗口底部截到屏幕外——玩家看到的就是「屏幕显示不全」，
+## 底下一排按钮永远点不到。启动时按可用区域等比缩一下。
+##
+## 只在桌面上做：手机上窗口本来就是全屏，缩了反而会露出黑边。
+func _fit_window_to_screen() -> void:
+	if not OS.has_feature("pc"):
+		return
+	var window := get_window()
+	if window == null:
+		return
+	var current := window.size
+	var usable := DisplayServer.screen_get_usable_rect(
+		DisplayServer.window_get_current_screen()).size
+	if current.x <= 0 or current.y <= 0 or usable.x <= 0 or usable.y <= 0:
+		return
+	var factor := minf(1.0,
+		minf(float(usable.x) / float(current.x), float(usable.y) / float(current.y)))
+	if factor < 0.999:
+		window.size = Vector2i(int(float(current.x) * factor),
+			int(float(current.y) * factor))
 
 
 # ---------------------------------------------------------------- 界面搭建
