@@ -67,7 +67,8 @@ func _build_menu() -> void:
 	box.add_child(LightTheme.label(tr("你的昵称"), 42))
 	_nickname = LineEdit.new()
 	_nickname.text = "玩家"
-	_nickname.custom_minimum_size = Vector2(0, 64)
+	_nickname.add_theme_font_size_override("font_size", 48)
+	_nickname.custom_minimum_size = Vector2(0, 92)
 	box.add_child(_nickname)
 
 	box.add_child(LightTheme.label(tr("创建房间"), 42))
@@ -75,29 +76,30 @@ func _build_menu() -> void:
 	host_button.pressed.connect(_on_host_pressed)
 	box.add_child(host_button)
 
-	# 没网也能玩：一台手机几个人传着玩（单机同屏）
-	box.add_child(LightTheme.label(tr("没网也能玩"), 42))
-	var solo_button := LightTheme.button(tr("单机同屏玩（一台手机轮流）"), 44)
-	solo_button.pressed.connect(_on_solo_pressed)
-	box.add_child(solo_button)
-
 	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 42))
 	var address_row := HBoxContainer.new()
 	address_row.add_theme_constant_override("separation", 10)
 	_ip = LineEdit.new()
 	_ip.placeholder_text = tr("192.168.1.5")
 	_ip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ip.custom_minimum_size = Vector2(0, 64)
+	_ip.add_theme_font_size_override("font_size", 48)
+	_ip.custom_minimum_size = Vector2(0, 92)
 	address_row.add_child(_ip)
 	_port = LineEdit.new()
 	_port.text = str(Protocol.GAME_PORT)
-	_port.custom_minimum_size = Vector2(160, 64)
+	_port.add_theme_font_size_override("font_size", 48)
+	_port.custom_minimum_size = Vector2(200, 92)
 	address_row.add_child(_port)
 	box.add_child(address_row)
 
 	var join_button := LightTheme.button(tr("加入"), 52)
 	join_button.pressed.connect(_on_join_pressed)
 	box.add_child(join_button)
+
+	# 单机同屏放最后：它是「没网时的备选」，不该盖过联机入口的优先级
+	var solo_button := LightTheme.button(tr("单机同屏玩（一台手机轮流）"), 44)
+	solo_button.pressed.connect(_on_solo_pressed)
+	box.add_child(solo_button)
 
 	_menu_status = LightTheme.label("", 30)
 	_menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

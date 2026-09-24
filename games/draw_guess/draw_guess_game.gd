@@ -654,6 +654,10 @@ func on_remote_message(payload: PackedByteArray) -> void:
 			guess_evaluated.emit(int(msg["peer_id"]), "", kind == 0, kind == 1)
 
 		DrawGuessMessages.Action.SET_CANDIDATES:
+			# 候选词只单发给画手，所以收到它就等于「这一轮轮到我画了」。
+			# 必须就地认定——候选词比状态快照先到，靠快照里的 drawer
+			# 字段判断会读到上一轮的值，结果把候选词丢掉。
+			_remote_drawer = get_local_id()
 			var words: PackedStringArray = msg["words"]
 			_candidates = []
 			for word in words:

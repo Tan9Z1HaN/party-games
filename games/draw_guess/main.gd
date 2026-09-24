@@ -55,6 +55,7 @@ var _picker: HsvPicker
 var _guesser_grid: GridContainer
 var _guess_target: OptionButton
 var _guess_input: LineEdit
+var _guess_row: VBoxContainer
 var _feedback_label: Label
 
 var _player_count: OptionButton
@@ -314,6 +315,7 @@ func _build_guess_row() -> Control:
 	box.add_theme_constant_override("separation", 4)
 	box.add_child(row)
 	box.add_child(_feedback_label)
+	_guess_row = box
 	return box
 
 
@@ -676,6 +678,8 @@ func _refresh() -> void:
 	# 工具栏也只给画手看。别人点「撤销」会把自己那份画布上的远端笔迹删掉，
 	# 而且删不回来——后续只会有新笔迹，不会重发旧的。
 	_toolbar.visible = _game.is_drawer(_local())
+	# 画手不能猜词，那行输入框对他就是纯占地方
+	_guess_row.visible = not _game.is_drawer(_local())
 	_update_live()
 
 
@@ -779,7 +783,9 @@ func _submit_guess() -> void:
 	elif target == _game.get_drawer_peer_id():
 		_feedback_label.text = tr("画手不能猜词")
 		return
-	_game.on_player_input(target, DrawGuessMessages.encode_guess(text))
+	# 必须走 _submit：联机时由它转给房间层。直接调游戏对象的话，
+	# 客户端上第一行就被 _is_authority() 挡掉，报文直接进黑洞。
+	_submit(target, DrawGuessMessages.encode_guess(text))
 	_guess_input.text = ""
 
 

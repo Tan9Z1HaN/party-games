@@ -200,6 +200,12 @@ func attach_game(game: MiniGame) -> void:
 	if _mode == Mode.HOST:
 		game.broadcast_requested.connect(_on_game_wants_broadcast)
 		game.to_player_requested.connect(_on_game_wants_unicast)
+		# 阶段一变就立刻推一份快照，不等到下一个 0.25 秒周期。
+		# 客户端靠快照才知道「轮到我选词了」，晚这一拍就会出现
+		# 候选词已经到了、界面却还停在上一个阶段的空窗。
+		game.phase_changed.connect(func(_phase, _left):
+			if _started:
+				_snapshot_elapsed = SNAPSHOT_INTERVAL)
 
 
 func get_game() -> MiniGame:
