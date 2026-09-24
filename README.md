@@ -49,17 +49,45 @@
 
 ## 测试
 
+### 快速检查（几秒钟）
+
 ```powershell
 .\tools\run_tests.ps1
 ```
 
-三套用例：
+四套用例，共 241 项：
 
 | 用例 | 覆盖什么 | 数量 |
 |---|---|---|
-| `drawing/tests/run_tests.gd` | 笔迹编解码往返、边界坐标、畸形数据、分片重组、坐标量化 | 71 |
-| `games/draw_guess/tests/run_tests.gd` | 词库加载、同义词匹配、报文编解码、完整回合、超时兜底、画手中途离开 | 81 |
-| `games/draw_guess/tests/smoke_scene.gd` | 真的实例化场景并像玩家一样把一局点完 | 41 |
+| `tools/tests/export_config.gd` | 导出预设（`include_filter`、安卓网络权限）、词库完整性、构建脚本编码 | 16 |
+| `drawing/tests/run_tests.gd` | 笔迹编解码、边界坐标、畸形数据、坐标量化、调色盘与笔宽 | 71 |
+| `games/draw_guess/tests/run_tests.gd` | 词库、同义词匹配、报文、完整回合、画手轮换、客户端快照 | 98 |
+| `games/draw_guess/tests/smoke_scene.gd` | 真的实例化界面并像玩家一样把一局点完 | 58 |
+
+### 联机测试（需要几十秒）
+
+这两套会真的起多个 Godot 进程，所以和快速检查分开跑：
+
+```powershell
+.\tools\tests\run_net_smoke.ps1    # 连接层：握手、玩家列表、报文路由、掉线
+.\tools\tests\run_net_round.ps1    # 真的打完整局，比对三个进程各自记录到了什么
+```
+
+`run_net_round.ps1` 是防「两边状态不一致」的关键。它起 **1 个主机 + 2 个客户端真的打完 3 回合**，
+然后比对三边的**结算记录、分数、公开答案**是否完全一致，并检查：
+
+- 非画手在作画阶段拿到的答案必须是空的；画手必须拿到
+- 客户端不该收到不属于自己的候选词
+- 三个回合必须是三个不同的画手
+
+**为什么非要跨进程比对**：之前报上来的 bug 几乎都是「两边对不上」——
+非画手能改画布、猜词被算成画手、客户端结算行永远是空的、选词面板对所有人可见。
+这些在单个进程里看全都是对的，只有把两边的记录摆在一起才露馅。
+
+写好后我故意把其中一个 bug 塞回去验证过：它确实报了
+`client1 round records differ from the host`，diff 直接指到 `rows=0` vs `rows=2`。
+
+### 一个已知的环境坑
 
 Godot 没有跑起来时容易撞上一个坑：如果 `%APPDATA%\Godot` 不可写，
 引擎在创建 `user://logs` 失败后会直接崩溃（访问违例）。

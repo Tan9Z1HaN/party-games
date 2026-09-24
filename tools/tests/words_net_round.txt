@@ -1,0 +1,7 @@
+id,word,difficulty,category,synonyms,disabled
+1,苹果,1,食物,,
+2,香蕉,1,食物,,
+3,西瓜,1,食物,,
+4,葡萄,1,食物,,
+5,樱桃,1,食物,,
+6,柠檬,1,食物,,

@@ -15,6 +15,7 @@ func _initialize() -> void:
 	print("=== 导出配置检查 ===")
 	_test_export_preset()
 	_test_word_file()
+	_test_build_scripts_ascii()
 	_finish()
 
 
@@ -74,6 +75,49 @@ func _test_word_file() -> void:
 	for difficulty in [1, 2, 3]:
 		_check("难度 %d 有词条" % difficulty, bank.count_of(difficulty) > 0,
 			"%d 条" % bank.count_of(difficulty))
+
+
+## 构建脚本必须是纯 ASCII。
+##
+## Windows PowerShell 5.1 读 .ps1 时按系统 ANSI 代码页解码（无 BOM 的 UTF-8
+## 也不例外），中文会变成乱码；更糟的是那种代码页是双字节的，
+## 注释末尾半个汉字会把**换行符吞掉**，下一行代码直接进了注释，整个函数断掉。
+##
+## 这个坑我踩过三次，每次都是「知道规则但还是随手写了中文」，
+## 所以改成机器盯着。
+func _test_build_scripts_ascii() -> void:
+	print("\n-- 构建脚本编码 --")
+	var files := _find_files("res://tools", ".ps1")
+	_check("找到了构建脚本", files.size() > 0, "%d 个" % files.size())
+
+	var offenders := PackedStringArray()
+	for path in files:
+		var text := FileAccess.get_file_as_string(path)
+		for i in text.length():
+			if text.unicode_at(i) > 127:
+				offenders.append(path.get_file())
+				break
+	_check("所有 .ps1 都是纯 ASCII", offenders.is_empty(),
+		"含非 ASCII 字符：" + ", ".join(offenders))
+
+
+func _find_files(root: String, suffix: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	var dir := DirAccess.open(root)
+	if dir == null:
+		return out
+	dir.list_dir_begin()
+	var entry := dir.get_next()
+	while entry != "":
+		if not entry.begins_with("."):
+			var full := root.path_join(entry)
+			if dir.current_is_dir():
+				out.append_array(_find_files(full, suffix))
+			elif entry.ends_with(suffix):
+				out.append(full)
+		entry = dir.get_next()
+	dir.list_dir_end()
+	return out
 
 
 func _check(label: String, condition: bool, detail: String = "") -> void:
