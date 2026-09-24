@@ -1,19 +1,25 @@
 extends Control
 
-## UNO 牌桌。目前是**单机对电脑**的形态。
+## UNO 牌桌。**这一层是纯视图**：只认 UnoGame 给出的状态字典，
+## 自己不碰规则，也不知道对面是 AI 还是网络上的真人。
 ##
 ## 为什么单机是对电脑而不是同屏热座：UNO 的核心就是隐藏手牌，
 ## 一台设备传着玩会让所有人看到彼此的手牌，规则直接失效。
-## 所以单机模式 = 一个真人 + 若干 AI，这也顺便给以后的掉线托管铺路。
+## 所以单机模式 = 一个真人 + 若干 AI。
 ##
 ## 伪 3D 的说明见 ui/fake3d.gdshader 和 ui/card_2d.gd：在 canvas_item 的
 ## shader 里自己做透视投影，全程 2D，没有相机也没有光照。
+##
+## 数据流：输入只走 _game.submit(报文)；状态只从 _game.state() 读。
+## 单机时 submit 直接在本地进规则，联机时由房间层转给房主——
+## 界面这一层完全不用分叉。
 
 signal exit_requested
 
-const LOCAL_PEER := 1
-const AI_DELAY := 0.85          ## AI 每步之间的停顿，太快看不清它在干什么
 const FLY_TIME := 0.34          ## 出牌飞行的时长
+
+## 单机时本机的 peer id。联机时用房间分配的真实 id。
+const SOLO_PEER := 1
 
 ## 手牌手感参数。和 card_2d.gd 的 set_fan_pose 对得上，
 ## 想调手感就改这里，改完跑 tools/tests/screenshot_matrix.gd 看图。
@@ -30,16 +36,20 @@ const TABLE_MAX_W := 1320.0
 const TOP_RESERVE := 150.0
 const BOTTOM_RESERVE := 150.0
 
-var _rules: UnoRules
-var _players: Array = []        ## [{peer_id, name, is_ai}]
+var _game: UnoGame
+var _room: Room = null
+var _players: Array = []        ## 从状态字典里读出来的 [{peer_id, name, count}]
 var _cards_root: Node2D
 var _hand_cards: Array = []     ## 我自己的手牌，UnoCard2D 数组，和 _hand_order 对应
 var _hand_order: Array[int] = []
 var _selected := -1
 var _pile_card: UnoCard2D
 var _deck_card: UnoCard2D
-var _ai_timer := 0.0
 var _busy := false              ## 飞行动画期间不接受输入
+## 本机出牌时的那张牌原来在哪，用来做起飞点。
+## 事件是权威端处理完之后才回来的，那时牌已经从手牌里删掉了，所以要提前记。
+var _play_from := Vector2.ZERO
+var _has_play_from := false
 
 ## 牌的整体缩放。跟着视口高度走，见 _layout()。
 var _card_scale := 1.0
@@ -48,6 +58,10 @@ var _pile_center := Vector2.ZERO
 var _deck_center := Vector2.ZERO
 ## 每出一张牌给牌堆抖一点角度，看起来才像一张张叠上去的，而不是同一张在换图。
 var _pile_tilt := 0.0
+## 状态字典里的局号。变了说明是新的一局，手牌节点要全清。
+var _round := -1
+## 单机重开时沿用的人数
+var _solo_ai_count := 2
 
 var _status_label: Label
 var _counts_label: Label
@@ -55,6 +69,7 @@ var _color_label: Label
 var _direction_label: Label
 var _color_picker: PanelContainer
 var _log_label: Label
+var _again_button: Button
 
 
 func _ready() -> void:
@@ -64,32 +79,111 @@ func _ready() -> void:
 
 	_cards_root = Node2D.new()
 	add_child(_cards_root)
+	# 牌堆和手上那张牌背先建出来。_refresh 会在布局跑之前就被状态变化叫到，
+	# 那时候没有这两个节点会直接踩空。
+	_pile_card = UnoCard2D.new()
+	_cards_root.add_child(_pile_card)
+	_deck_card = UnoCard2D.new()
+	_cards_root.add_child(_deck_card)
 
 	_build_ui()
 	resized.connect(_layout)
 
 
 func setup_solo(ai_count := 2) -> void:
-	_players = [{"peer_id": LOCAL_PEER, "name": tr("你"), "is_ai": false}]
+	_solo_ai_count = clamp(ai_count, 1, 3)
+	var players: Array = [{"peer_id": SOLO_PEER, "name": tr("你"), "is_ai": false}]
 	var names := [tr("小红"), tr("小蓝"), tr("小绿")]
-	for i in clamp(ai_count, 1, 3):
-		_players.append({
-			"peer_id": LOCAL_PEER + i + 1,
+	for i in _solo_ai_count:
+		players.append({
+			"peer_id": SOLO_PEER + i + 1,
 			"name": names[i],
 			"is_ai": true,
 		})
 
-	var seed_value := int(Time.get_unix_time_from_system()) % 100000
-	_rules = UnoRules.new()
-	_rules.setup(_players, {}, seed_value)
+	_room = null
+	_start_game(players, {})
+	if _game != null:
+		_game.start_round()
+	if _again_button != null:
+		_again_button.visible = true
 
 	# 牌面贴图是运行时烘的（见 ui/card_art.gd），第一局开局前等它一下。
 	# 之后就一直命中缓存，重开一局是瞬时的。
 	await UnoCardArt.ensure_baked()
-
-	_sync_hand()
 	_layout()
 	_refresh()
+
+
+## 联机入口。app.gd 收到开局广播后调用，两端都会走这里。
+func setup_networked(room: Room, players: Array, config: Dictionary) -> void:
+	_room = room
+	_start_game(players, config)
+	if _game == null:
+		return
+	_game.bind_room(room)
+
+	room.attach_game(_game)
+	room.game_broadcast.connect(_on_net_broadcast)
+	room.game_snapshot.connect(_on_net_snapshot)
+
+	# 开局由房主发起。客户端等主机发来的第一份快照和手牌。
+	if room.is_host():
+		_game.start_round()
+	# 客户端点了也没用：重发只能由房主发起，不然两边的牌对不上
+	if _again_button != null:
+		_again_button.visible = room.is_host()
+	await UnoCardArt.ensure_baked()
+	_layout()
+	_refresh()
+
+
+## 造一个 UnoGame 并接上信号。单机和联机共用。
+func _start_game(players: Array, config: Dictionary) -> void:
+	if _game != null:
+		_game.queue_free()
+	_game = UnoGame.new()
+	_game.name = "UnoGame"
+	add_child(_game)
+	_game.state_changed.connect(_refresh)
+	_game.event_played.connect(_on_played)
+	_game.event_drew.connect(_on_drew)
+	_game.event_log.connect(_set_log)
+	_players = players
+	_game.setup(players, config)
+
+
+func _on_net_broadcast(payload: PackedByteArray) -> void:
+	if _game != null:
+		_game.on_remote_message(payload)
+
+
+func _on_net_snapshot(snapshot: Dictionary) -> void:
+	if _game != null:
+		_game.apply_snapshot(snapshot)
+
+
+func local_peer() -> int:
+	return _game.local_peer_id() if _game != null else SOLO_PEER
+
+
+## 重开一局。单机自己重发就行；联机只有房主能点——
+## 重发要保证所有人看到同一副牌，客户端自己重发只会跟主机对不上。
+func _on_again() -> void:
+	if _room == null:
+		setup_solo(_solo_ai_count)
+	elif _room.is_host() and _game != null:
+		_game.start_round()
+
+
+## 新一局：手牌节点全清掉重建，免得上一局的牌串进来。
+func _clear_hand() -> void:
+	for card in _hand_cards:
+		card.queue_free()
+	_hand_cards.clear()
+	_hand_order = []
+	_selected = -1
+	_has_play_from = false
 
 
 # ---------------------------------------------------------------- 界面
@@ -151,7 +245,8 @@ func _build_ui() -> void:
 	pass_button.pressed.connect(_on_pass)
 	buttons.add_child(pass_button)
 	var again := LightTheme.button(tr("重开一局"), 30)
-	again.pressed.connect(func(): setup_solo(_players.size() - 1))
+	_again_button = again
+	again.pressed.connect(_on_again)
 	buttons.add_child(again)
 	var back := LightTheme.button(tr("退出"), 30)
 	back.pressed.connect(func(): exit_requested.emit())
@@ -276,7 +371,7 @@ func _layout_hand() -> void:
 
 ## 把手牌同步成引擎里的样子。发牌、出牌、摸牌之后都要调用。
 func _sync_hand() -> void:
-	var hand := _rules.hand_of(LOCAL_PEER)
+	var hand: Array = _game.state().get("my_hand", []) if _game != null else []
 	# 已有的卡牌节点尽量复用，只补差量，免得每次都重建导致动画被打断
 	while _hand_cards.size() > hand.size():
 		var extra: UnoCard2D = _hand_cards.pop_back()
@@ -294,36 +389,49 @@ func _sync_hand() -> void:
 
 
 func _refresh() -> void:
-	if _rules == null:
+	if _game == null:
+		return
+	var s := _game.state()
+	if s.is_empty():
 		return
 
+	# 这一份状态对应的是一局新的牌，手牌节点全清掉重来
+	if int(s.get("round", 0)) != _round:
+		_round = int(s.get("round", 0))
+		_clear_hand()
+	# 手牌也是状态的一部分；_sync_hand 里会顺手重排
+	_sync_hand()
+
 	# 弃牌堆顶
-	_pile_card.set_card(_rules.top_card(), true)
+	_pile_card.set_card(int(s.get("top_card", -1)), true)
 
 	# 各家张数
+	_players = s.get("players", [])
 	var parts := PackedStringArray()
 	for p in _players:
-		parts.append("%s %d" % [p["name"], _rules.hand_count(int(p["peer_id"]))])
+		parts.append("%s %d" % [String(p["name"]), int(p["count"])])
 	_counts_label.text = "　".join(parts)
 
 	# 当前颜色 + 方向
-	var color_index := _rules.active_color()
+	var color_index := int(s.get("active_color", -1))
 	_color_label.text = UnoDeck.COLOR_NAMES[color_index] if color_index >= 0 else "?"
 	_color_label.add_theme_color_override("font_color",
 		UnoCardPainter.COLOR_FILL.get(color_index, Color.BLACK))
-	_direction_label.text = tr("顺时针") if _rules.direction() > 0 else tr("逆时针")
+	_direction_label.text = tr("顺时针") if int(s.get("direction", 1)) > 0 \
+		else tr("逆时针")
 
 	# 状态
-	var current := _rules.current_player()
-	if _rules.is_finished():
-		_status_label.text = tr("%s 赢了！") % _name_of(_rules.winner())
-	elif _rules.phase() == UnoRules.Phase.CHOOSING_COLOR:
-		_status_label.text = tr("%s 在选颜色…") % _name_of(_rules.color_chooser())
-	elif current == LOCAL_PEER:
+	var current := int(s.get("current", 0))
+	if bool(s.get("finished", false)):
+		_status_label.text = tr("%s 赢了！") % _name_of(int(s.get("winner", 0)))
+	elif int(s.get("color_chooser", 0)) != 0:
+		_status_label.text = tr("%s 在选颜色…") % _name_of(int(s["color_chooser"]))
+	elif current == local_peer():
 		var hint := tr("轮到你了")
-		if _rules.pending_draw() > 0:
-			hint += tr("　（要摸 %d 张，或者叠牌）") % _rules.pending_draw()
-		elif _rules.drawn_this_turn():
+		var pending := int(s.get("pending_draw", 0))
+		if pending > 0:
+			hint += tr("　（要摸 %d 张，或者叠牌）") % pending
+		elif bool(s.get("drawn_this_turn", false)):
 			hint += tr("　（出牌，或者过牌）")
 		else:
 			hint += tr("　（点牌堆摸牌）")
@@ -331,10 +439,7 @@ func _refresh() -> void:
 	else:
 		_status_label.text = tr("%s 的回合…") % _name_of(current)
 
-	_color_picker.visible = _rules.phase() == UnoRules.Phase.CHOOSING_COLOR \
-		and _rules.color_chooser() == LOCAL_PEER
-
-	_layout_hand()
+	_color_picker.visible = int(s.get("color_chooser", 0)) == local_peer()
 
 
 func _name_of(peer_id: int) -> String:
@@ -351,67 +456,29 @@ func _set_log(text: String) -> void:
 # ---------------------------------------------------------------- 回合驱动
 
 func _process(delta: float) -> void:
-	if _rules == null or _rules.is_finished() or _busy:
-		return
-	var current := _rules.current_player()
-	if current == LOCAL_PEER:
-		_ai_timer = 0.0
-		return
-	# AI 每步之间停一下，不然一瞬间打完根本看不清发生了什么
-	_ai_timer += delta
-	if _ai_timer >= AI_DELAY:
-		_ai_timer = 0.0
-		_ai_step()
+	# 联机时由房间层统一 tick（两端一致）；单机这里自己推，AI 才会走。
+	if _room == null and _game != null:
+		_game.tick(delta)
 
 
-func _ai_step() -> void:
-	var peer := _rules.current_player()
-
-	if _rules.phase() == UnoRules.Phase.CHOOSING_COLOR:
-		_rules.choose_color(peer, UnoAi.choose_color(_rules, peer))
-		_refresh()
-		return
-
-	var card := UnoAi.choose_card(_rules, peer)
-	if card >= 0:
-		_play(peer, card)
-		return
-
-	# 没牌可出就摸。摸到的能出就出，不能出则过（auto_pass 开着的话引擎已自动过）
-	var drew := _rules.draw_card(peer)
-	if bool(drew.get("playable", false)):
-		var again := UnoAi.choose_card(_rules, peer)
-		if again >= 0:
-			_play(peer, again)
-			return
-	if _rules.current_player() == peer:
-		_rules.pass_turn(peer)
-	_set_log(tr("%s 摸了一张") % _name_of(peer))
-	_sync_hand()
-	_refresh()
+## 权威端确认有人出牌了。真人点的和 AI 打的都会走到这里。
+func _on_played(peer_id: int, card: int) -> void:
+	_animate_play(card, _source_position(peer_id, card), peer_id)
 
 
-## 出牌的统一入口。真人点和 AI 都走这里，动画路径一致。
-func _play(peer: int, card: int) -> void:
-	var from_pos := _source_position(peer, card)
-
-	if UnoDeck.is_wild(card):
-		var res := _rules.play_card(peer, card)
-		if bool(res.get("needs_color", false)):
-			if peer == LOCAL_PEER:
-				_refresh()
-				return          # 等玩家在选色面板上点
-			_rules.choose_color(peer, UnoAi.choose_color(_rules, peer))
-	else:
-		_rules.play_card(peer, card)
-
-	_set_log(tr("%s 出了 %s") % [_name_of(peer), UnoDeck.describe(card)])
-	_animate_play(card, from_pos, peer)
+func _on_drew(peer_id: int, count: int) -> void:
+	# 只有自己摸牌才看得见牌飞进手里；别人摸了几张看日志就够了
+	if peer_id == local_peer() and count > 0:
+		_animate_draw()
 
 
 ## 算出「这张牌是从哪飞出来的」，用来做起飞点。
 func _source_position(peer: int, card: int) -> Vector2:
-	if peer == LOCAL_PEER:
+	if peer == local_peer():
+		# 事件是权威端处理完之后才回来的，那时这张牌已经从手牌里删掉了，
+		# 所以起飞点要看出牌前记下来的那个位置。
+		if _has_play_from:
+			return _play_from
 		var index := _hand_order.find(card)
 		if index >= 0 and index < _hand_cards.size():
 			return (_hand_cards[index] as UnoCard2D).position
@@ -474,20 +541,20 @@ func _animate_play(card: int, from_pos: Vector2, _peer: int) -> void:
 	flying.queue_free()
 	_busy = false
 	_refresh()
-	# 玩家出了万能牌、或者轮到玩家选色，就把选色面板亮出来
-	if _rules.phase() == UnoRules.Phase.CHOOSING_COLOR \
-			and _rules.color_chooser() == LOCAL_PEER:
-		_color_picker.visible = true
 
 
 # ---------------------------------------------------------------- 输入
 
 func _gui_input(event: InputEvent) -> void:
-	if _rules == null or _busy or _color_picker.visible:
+	if _game == null or _busy or _color_picker.visible:
 		return
-	if _rules.current_player() != LOCAL_PEER:
+	var s := _game.state()
+	if s.is_empty() or bool(s.get("finished", false)):
 		return
-	if _rules.phase() != UnoRules.Phase.PLAYING:
+	if int(s.get("current", 0)) != local_peer():
+		return
+	# 等别人定颜色的时候不能出牌，规则那边也会拒，这里先挡住省一次往返
+	if int(s.get("color_chooser", 0)) != 0:
 		return
 
 	var pressed := false
@@ -546,49 +613,30 @@ func _pick_card(local_pos: Vector2) -> int:
 
 func _try_play_hand_card(index: int) -> void:
 	var card := _hand_order[index]
-	if not _rules.can_play(LOCAL_PEER, card):
-		_set_log(tr("这张现在出不了"))
-		_selected = -1
-		_layout_hand()
-		return
+	# 记下起飞点：确认报文回来时这张牌已经不在手牌里了
+	if index < _hand_cards.size():
+		_play_from = (_hand_cards[index] as UnoCard2D).position
+		_has_play_from = true
 	_selected = -1
-	_play(LOCAL_PEER, card)
+	_layout_hand()
+	_game.submit(UnoMessages.encode_play(card, -1))
 
 
 func _on_color_chosen(color: int) -> void:
 	_color_picker.visible = false
-	_rules.choose_color(LOCAL_PEER, color)
-	_set_log(tr("你把颜色定成了 %s") % UnoDeck.COLOR_NAMES[color])
-	_animate_play(_rules.top_card(),
-		Vector2(view_size().x * 0.5, view_size().y - BOTTOM_RESERVE), LOCAL_PEER)
+	_game.submit(UnoMessages.encode_choose_color(color))
 
 
 func _on_say_uno() -> void:
-	var res := _rules.say_uno(LOCAL_PEER)
-	_set_log(tr("你喊了 UNO！") if res.get("ok", false) else tr("现在不用喊") )
-	_refresh()
+	_game.submit(UnoMessages.encode_say_uno())
 
 
 ## 摸牌。入口有两个：点牌堆，或者点底部那个「摸牌」按钮。
-## 规则本身管着「是不是你的回合」「本回合摸过没有」，这里只负责翻译结果。
+## 能不能摸由权威端判定，这里只管把意图发出去。
 func _on_draw() -> void:
-	if _rules == null or _busy or _color_picker.visible:
+	if _game == null or _busy or _color_picker.visible:
 		return
-	var res := _rules.draw_card(LOCAL_PEER)
-	if not bool(res.get("ok", false)):
-		_set_log(tr("不能摸牌：%s") % String(res.get("error", "")))
-		return
-
-	var taken: Array = res.get("cards", [])
-	if bool(res.get("penalty", false)):
-		# 罚抽是一次摸完并直接过回合，不值得一张张飞
-		_set_log(tr("吃了 %d 张罚牌") % taken.size())
-		_sync_hand()
-		_refresh()
-		return
-
-	_set_log(tr("你摸了一张"))
-	_animate_draw()
+	_game.submit(UnoMessages.encode_draw())
 
 
 ## 摸牌的动画：一张牌背从牌堆飞进手里，落位之后才亮出牌面。
@@ -631,10 +679,4 @@ func _animate_draw() -> void:
 
 
 func _on_pass() -> void:
-	var res := _rules.pass_turn(LOCAL_PEER)
-	if not res.get("ok", false):
-		_set_log(tr("没摸牌就不能过"))
-		return
-	_set_log(tr("你过牌"))
-	_sync_hand()
-	_refresh()
+	_game.submit(UnoMessages.encode_pass())

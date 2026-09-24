@@ -43,6 +43,7 @@ func _run() -> void:
 	await _test_render_every_state()
 	await _test_draw()
 	_test_color_picker_pops()
+	_test_networked_wiring()
 	_finish()
 
 
@@ -58,9 +59,9 @@ func _test_initial_state() -> void:
 	# 起始牌恰好翻到变色牌时，规则上第一个玩家就要先定颜色，
 	# 这时候面板本来就该是亮的——所以只能对"面板状态和规则一致"下断言。
 	_check("选色面板的显示跟规则一致",
-		_scene._color_picker.visible == (_scene._rules.phase()
+		_scene._color_picker.visible == (_scene._game._rules.phase()
 			== UnoRules.Phase.CHOOSING_COLOR
-			and _scene._rules.color_chooser() == 1))
+			and _scene._game._rules.color_chooser() == 1))
 
 
 ## 手牌是平铺展开的：一张挨一张横着排，不带旋转也不带 3D 姿态。
@@ -120,7 +121,7 @@ func _test_fake_3d_pose() -> void:
 ## 这是「界面能不能渲染引擎产生的任何状态」的实测。
 func _test_render_every_state() -> void:
 	print("\n-- 渲染引擎跑出来的每个状态 --")
-	var rules: UnoRules = _scene._rules
+	var rules: UnoRules = _scene._game._rules
 	var steps := 0
 	var saw_choosing_color := false
 	while not rules.is_finished() and steps < 3000:
@@ -163,7 +164,7 @@ func _test_draw() -> void:
 		await process_frame
 	_check("出牌动画跑完后不再忙碌", not _scene._busy)
 
-	var rules: UnoRules = _scene._rules
+	var rules: UnoRules = _scene._game._rules
 	# 摆一个「轮到本机、桌面红 5、手里只有一张出不掉的蓝 9」的局面
 	var discard: Array[int] = [UnoDeck.make(UnoDeck.C.RED, UnoDeck.F.N5)]
 	rules._discard = discard
@@ -214,7 +215,7 @@ func _test_draw() -> void:
 ## 本机出万能牌 -> 进入选色阶段 -> 面板弹出来 -> 选完收回去。
 func _test_color_picker_pops() -> void:
 	print("\n-- 本机选色 --")
-	var rules: UnoRules = _scene._rules
+	var rules: UnoRules = _scene._game._rules
 	# 直接摆一个「轮到本机、手里有万能牌、桌面是红 5」的局面
 	rules._order = [1, 2, 3]
 	rules._cursor = 0
@@ -251,6 +252,29 @@ func _test_color_picker_pops() -> void:
 	_scene._on_color_chosen(UnoDeck.C.BLUE)
 	_check("选完颜色面板收回去", not _scene._color_picker.visible)
 	_check("颜色定成了蓝", rules.active_color() == UnoDeck.C.BLUE)
+
+
+## 联机入口的接线。真的连网要靠 tools/tests/run_net_uno.ps1，
+## 这里只确认「app.gd 调了 setup_networked 之后，牌桌和游戏对象接上了」——
+## 少接一根线（比如忘了 bind_room）点什么都纹丝不动，而且不报错。
+func _test_networked_wiring() -> void:
+	print("\n-- 联机接线 --")
+	var room := Room.new()
+	root.add_child(room)
+	var players: Array = [
+		{"peer_id": 1, "name": "甲"},
+		{"peer_id": 2, "name": "乙"},
+	]
+	_scene.setup_networked(room, players, {})
+
+	_check("联机之后牌桌挂上了游戏对象", _scene._game != null)
+	_check("游戏对象知道往哪个房间发操作",
+		_scene._game != null and _scene._game._room == room)
+	_check("还没开局时状态是空的",
+		_scene._game != null and _scene._game.state().is_empty())
+	# 客户端点了也没用：重发只能由房主发起，不然两边的牌对不上
+	_check("客户端看不到重开一局的按钮", not _scene._again_button.visible)
+	room.queue_free()
 
 
 ## 手牌很多时扇形要自己压缩间距，不能铺出屏幕。

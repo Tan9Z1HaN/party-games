@@ -437,6 +437,45 @@ func catch_uno(catcher: int, target: int) -> Dictionary:
 	return {"ok": true, "caught": true, "cards": taken, "catcher": catcher, "target": target}
 
 
+## 玩家离场（联机时掉线退出）。
+##
+## 手牌塞回牌堆：留着的话结算会凭空多出分数，而且牌会凭空少掉几张。
+## 轮到他的话就把回合交给下一个人，否则整局会卡在一个不存在的人身上。
+func remove_player(peer_id: int) -> void:
+	var idx := _order.find(peer_id)
+	if idx < 0:
+		return
+
+	for card in (_hands.get(peer_id, []) as Array[int]):
+		_draw_pile.append(card)
+	_hands.erase(peer_id)
+	_uno_flag.erase(peer_id)
+	_order.remove_at(idx)
+
+	if _winner == peer_id:
+		_winner = 0
+	if _order.is_empty():
+		return
+
+	# _cursor 是「当前玩家在 _order 里的下标」：删掉前面的人要往前挪一格，
+	# 删掉的正好是他自己就原地不动——下一个玩家自然顶上来。
+	if idx < _cursor:
+		_cursor -= 1
+	_cursor = posmod(_cursor, _order.size())
+
+	if _order.size() == 1:
+		_winner = _order[0]
+
+	# 他正好在选颜色：随便定一个能继续的颜色，别把流程挂住
+	if _phase == Phase.CHOOSING_COLOR and _color_chooser == peer_id:
+		_pending_play = -1
+		_color_chooser = 0
+		_phase = Phase.PLAYING
+		if _active_color == UnoDeck.C.WILD:
+			var top_color := UnoDeck.color_of(top_card())
+			_active_color = top_color if top_color != UnoDeck.C.WILD else UnoDeck.C.RED
+
+
 # ---------------------------------------------------------------- 结算
 
 ## 一张牌值多少分。数字牌就是面值（0 是 0 分），功能牌 20，万能牌 50。
