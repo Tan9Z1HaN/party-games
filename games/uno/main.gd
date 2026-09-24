@@ -6,8 +6,8 @@ extends Control
 ## 一台设备传着玩会让所有人看到彼此的手牌，规则直接失效。
 ## 所以单机模式 = 一个真人 + 若干 AI，这也顺便给以后的掉线托管铺路。
 ##
-## 伪 3D 的说明见 ui/card_2d.gd：靠 Node2D 的 scale/skew/rotation 三件套，
-## 全程 2D，没有相机也没有光照。
+## 伪 3D 的说明见 ui/fake3d.gdshader 和 ui/card_2d.gd：在 canvas_item 的
+## shader 里自己做透视投影，全程 2D，没有相机也没有光照。
 
 signal exit_requested
 
@@ -15,8 +15,20 @@ const LOCAL_PEER := 1
 const AI_DELAY := 0.85          ## AI 每步之间的停顿，太快看不清它在干什么
 const FLY_TIME := 0.34          ## 出牌飞行的时长
 
-## 扇形手感参数，和 card_2d.gd 里的 set_fan_pose 是一套
-const FAN := {"spread": 0.052, "spacing": 92.0, "arc": 12.0, "lean": 0.11}
+## 扇形手感参数。和 card_2d.gd 的 set_fan_pose 对得上，
+## 想调手感就改这里，改完跑 tools/tests/screenshot_matrix.gd 看图。
+const FAN_SPACING := 92.0
+const FAN_SPREAD := 0.052
+const FAN_ARC := 12.0
+const FAN_TURN := 8.0           ## 每格绕竖轴转多少度，伪 3D 的"扇开"
+const FAN_TILT := 5.0           ## 整把牌绕横轴的仰角
+
+## 牌桌内容的宽度上限。桌面窗口拉得很宽时把牌桌收在一条竖条里居中，
+## 否则牌堆会被甩到屏幕两端、中间空一大片。
+const TABLE_MAX_W := 1320.0
+## 上下两条被界面占掉的带子：上面是人数和状态，下面是按钮。
+const TOP_RESERVE := 150.0
+const BOTTOM_RESERVE := 150.0
 
 var _rules: UnoRules
 var _players: Array = []        ## [{peer_id, name, is_ai}]
@@ -28,6 +40,14 @@ var _pile_card: UnoCard2D
 var _deck_card: UnoCard2D
 var _ai_timer := 0.0
 var _busy := false              ## 飞行动画期间不接受输入
+
+## 牌的整体缩放。跟着视口高度走，见 _layout()。
+var _card_scale := 1.0
+## 牌堆和牌堆左边那张牌背的中心。每次重排都重算。
+var _pile_center := Vector2.ZERO
+var _deck_center := Vector2.ZERO
+## 每出一张牌给牌堆抖一点角度，看起来才像一张张叠上去的，而不是同一张在换图。
+var _pile_tilt := 0.0
 
 var _status_label: Label
 var _counts_label: Label
@@ -63,6 +83,10 @@ func setup_solo(ai_count := 2) -> void:
 	_rules = UnoRules.new()
 	_rules.setup(_players, {}, seed_value)
 
+	# 牌面贴图是运行时烘的（见 ui/card_art.gd），第一局开局前等它一下。
+	# 之后就一直命中缓存，重开一局是瞬时的。
+	await UnoCardArt.ensure_baked()
+
 	_sync_hand()
 	_layout()
 	_refresh()
@@ -76,6 +100,9 @@ func _build_ui() -> void:
 	for side in ["left", "right", "top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + side, 36)
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 卡牌是 Node2D，z_index 在 0~90；界面控件必须压在上面，
+	# 否则手牌会盖住底部的按钮（一开始就是这样，牌挡住了「重开一局」）。
+	margin.z_index = 100
 	add_child(margin)
 
 	var box := VBoxContainer.new()
@@ -137,6 +164,7 @@ func _build_color_picker() -> void:
 	style.bg_color = Color(0.1, 0.1, 0.15, 0.55)
 	_color_picker.add_theme_stylebox_override("panel", style)
 	_color_picker.visible = false
+	_color_picker.z_index = 200
 	add_child(_color_picker)
 
 	var box := VBoxContainer.new()
@@ -150,7 +178,7 @@ func _build_color_picker() -> void:
 		var pick := LightTheme.button(UnoDeck.COLOR_NAMES[color], 34)
 		pick.custom_minimum_size = Vector2(150, 110)
 		pick.add_theme_color_override("font_color", Color(0.1, 0.1, 0.12))
-		var style_box := LightTheme.surface_box(UnoCard2D.COLOR_FILL[color])
+		var style_box := LightTheme.surface_box(UnoCardPainter.COLOR_FILL[color])
 		for state in ["normal", "hover", "pressed"]:
 			pick.add_theme_stylebox_override(state, style_box)
 		pick.pressed.connect(func(): _on_color_chosen(color))
@@ -161,14 +189,25 @@ func _build_color_picker() -> void:
 
 # ---------------------------------------------------------------- 布局
 
-func _layout() -> void:
+## 可用的绘制区域。窗口大小还没定下来时退回设计稿尺寸。
+func view_size() -> Vector2:
 	var view := size
-	if view.x <= 0.0:
-		view = Vector2(1080, 1920)
+	if view.x <= 0.0 or view.y <= 0.0:
+		return Vector2(1080, 1920)
+	return view
 
-	# 弃牌堆和牌堆摆在中间偏上
-	var pile_pos := Vector2(view.x * 0.42, view.y * 0.46)
-	var deck_pos := Vector2(view.x * 0.66, view.y * 0.46)
+
+func _layout() -> void:
+	var view := view_size()
+	var table_w := minf(view.x, TABLE_MAX_W)
+
+	# 牌的大小：跟着可用高度走，同时不能大到一副手牌铺不下。
+	# 1080x1920 的设计稿在这里正好算出 1.0。
+	var by_height := view.y / 1740.0
+	# 8 张牌的横向预算：牌宽 148 + 7 个间距 92
+	var by_width := table_w * 0.86 / 792.0
+	_card_scale = clampf(minf(by_height, by_width), 0.55, 1.35)
+
 	if _pile_card == null:
 		_pile_card = UnoCard2D.new()
 		_cards_root.add_child(_pile_card)
@@ -176,47 +215,65 @@ func _layout() -> void:
 		_deck_card = UnoCard2D.new()
 		_cards_root.add_child(_deck_card)
 
-	# 弃牌堆微微斜着放，比正着摆更有"摊在桌上"的感觉
-	_pile_card.position = pile_pos
-	_pile_card.rotation = -0.10
-	_pile_card.scale = Vector2(1.08, 1.08 - 0.06)
-	_pile_card.skew = -0.06
-	_pile_card.z_index = 5
+	var card_half := UnoCard2D.SIZE.y * _card_scale * 0.5
+	var hand_top := view.y - BOTTOM_RESERVE - card_half * 2.0 - 40.0
+	# 牌堆摆在"顶部标题"和"手牌上沿"之间正中：屏幕多高、多宽都不会
+	# 在中间留出一大片死空，也不会顶到任何一边。
+	var pile_y := (TOP_RESERVE + hand_top) * 0.5
+	_pile_center = Vector2(view.x * 0.5, pile_y)
+	_deck_center = _pile_center + Vector2(UnoCard2D.SIZE.x * _card_scale * 1.55, 0.0)
 
-	_deck_card.set_card(0, false)
-	_deck_card.position = deck_pos
-	_deck_card.rotation = 0.08
-	_deck_card.scale = Vector2(1.05, 1.05 - 0.05)
-	_deck_card.skew = 0.05
-	_deck_card.z_index = 4
-
+	_place_pile()
+	_place_deck()
 	_layout_hand()
 
 
+## 弃牌堆。稍微斜着、并且往后仰，像是摊在桌面上。
+func _place_pile() -> void:
+	_pile_card.place_at(_pile_center, -0.09 + _pile_tilt, 16.0, -14.0,
+		_card_scale * 1.08, 5)
+
+
+func _place_deck() -> void:
+	_deck_card.set_card(-1, false)
+	_deck_card.place_at(_deck_center, 0.08, 16.0, 12.0, _card_scale * 1.05, 4)
+
+
 func _layout_hand() -> void:
-	var view := size
-	if view.x <= 0.0:
-		view = Vector2(1080, 1920)
+	var view := view_size()
 	var count := _hand_cards.size()
 	if count == 0:
 		return
 
-	# 牌多了就压缩间距，别铺出屏幕
-	var cfg := FAN.duplicate()
-	var max_span := view.x - 260.0
-	cfg["spacing"] = minf(float(FAN["spacing"]), max_span / maxf(1.0, float(count - 1)))
+	var card_half := UnoCard2D.SIZE.y * _card_scale * 0.5
+	var max_offset := maxf(1.0, (float(count) - 1.0) * 0.5)
+	var arc := FAN_ARC * _card_scale
+	# 最外侧的牌会顺着扇形往下掉 max_offset * arc，要一起让出来，
+	# 否则手牌会盖到底部那排按钮上。
+	var origin := Vector2(view.x * 0.5,
+		view.y - BOTTOM_RESERVE - card_half - max_offset * arc)
 
-	var base := Vector2(view.x * 0.5, view.y - 190.0)
+	# 间距先按手感取基准值，张数多了再压，免得铺出屏幕
+	var spacing := FAN_SPACING * _card_scale
+	if count > 1:
+		var span_budget := minf(view.x, TABLE_MAX_W) * 0.94 \
+			- UnoCard2D.SIZE.x * _card_scale
+		spacing = minf(spacing, span_budget / (float(count) - 1.0))
+
+	var cfg := {
+		"origin": origin,
+		"spacing": spacing,
+		"spread": FAN_SPREAD,
+		"arc": arc,
+		# 张数很多时把每格的转角压回来，最外侧别超过 42 度——
+		# 超过 70 度这个透视投影会把牌拉成一条竖线。
+		"turn": minf(FAN_TURN, 42.0 / max_offset),
+		"tilt": FAN_TILT,
+		"scale": _card_scale,
+	}
 	for i in count:
 		var card: UnoCard2D = _hand_cards[i]
-		var offset := float(i) - float(count - 1) * 0.5
-		card.set_fan_pose(offset, cfg)
-		card.position += base
-		card.snap_to_pose()
-		card.position += Vector2.ZERO
-		# set_fan_pose 设的是相对位置，这里整体平移到牌桌底部
-		card.position = base + Vector2(offset * float(cfg["spacing"]),
-			absf(offset) * float(cfg["arc"]))
+		card.set_fan_pose(float(i) - max_offset, cfg)
 		card.set_lifted(i == _selected)
 
 
@@ -258,7 +315,7 @@ func _refresh() -> void:
 	var color_index := _rules.active_color()
 	_color_label.text = UnoDeck.COLOR_NAMES[color_index] if color_index >= 0 else "?"
 	_color_label.add_theme_color_override("font_color",
-		UnoCard2D.COLOR_FILL.get(color_index, Color.BLACK))
+		UnoCardPainter.COLOR_FILL.get(color_index, Color.BLACK))
 	_direction_label.text = tr("顺时针") if _rules.direction() > 0 else tr("逆时针")
 
 	# 状态
@@ -359,7 +416,7 @@ func _source_position(peer: int, card: int) -> Vector2:
 		var index := _hand_order.find(card)
 		if index >= 0 and index < _hand_cards.size():
 			return (_hand_cards[index] as UnoCard2D).position
-		return Vector2(size.x * 0.5, size.y - 190.0)
+		return Vector2(view_size().x * 0.5, view_size().y - BOTTOM_RESERVE)
 	# 对手：从他名字那一行附近飞出来
 	for i in _players.size():
 		if int(_players[i]["peer_id"]) == peer:
@@ -368,36 +425,60 @@ func _source_position(peer: int, card: int) -> Vector2:
 	return Vector2(size.x * 0.5, 150.0)
 
 
-## 出一张牌的飞行动画：从起飞点滑到弃牌堆，姿态一路过渡到牌堆的斜放。
-## 这是「牌的移动」最值得做的一处——不做的话牌是瞬移的，很出戏。
-func _animate_play(card: int, from_pos: Vector2, peer: int) -> void:
+## 出一张牌的飞行动画。两段走：
+##   第一段冲到牌堆正上方，同时转正、放大 —— 像被甩出去；
+##   第二段落下去，带一点回弹。
+## 姿态（绕竖轴 / 横轴）也是 tween 出来的，所以牌在空中是真的在转身，
+## 不是只在平面上平移。这是「牌的移动」最值得做的一处：
+## 不做的话牌是瞬移的，很出戏。
+func _animate_play(card: int, from_pos: Vector2, _peer: int) -> void:
 	_busy = true
+
+	# 每张牌落下的角度都不一样，牌堆才像一张张叠上去的
+	_pile_tilt = randf_range(-0.10, 0.10)
+	_place_pile()
+
 	var flying := UnoCard2D.new()
 	flying.set_card(card, true)
-	flying.position = from_pos
-	flying.z_index = 80
-	flying.rotation = -0.25
-	flying.skew = 0.25
+	# 起点提到手牌上方一点，视觉上是"先抽出来再飞"
+	flying.place_at(from_pos + Vector2(0, -40), -0.22, 0.0, 0.0,
+		_card_scale * 1.05, 80)
 	_cards_root.add_child(flying)
 
 	_sync_hand()
 	_refresh()
 
-	var tween := create_tween()
-	tween.set_parallel(true)
-	tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tween.tween_property(flying, "position", _pile_card.position, FLY_TIME)
-	tween.tween_property(flying, "rotation", _pile_card.rotation, FLY_TIME)
-	tween.tween_property(flying, "skew", _pile_card.skew, FLY_TIME)
-	tween.tween_property(flying, "scale", _pile_card.scale, FLY_TIME)
-	tween.chain().tween_callback(func():
-		flying.queue_free()
-		_busy = false
-		_refresh()
-		# 玩家出了万能牌、或者轮到玩家选色，就把选色面板亮出来
-		if _rules.phase() == UnoRules.Phase.CHOOSING_COLOR \
-				and _rules.color_chooser() == LOCAL_PEER:
-			_color_picker.visible = true)
+	var target := _pile_card.position
+	var apex := target + Vector2(0, -170.0)
+	var fly_out := FLY_TIME * 0.45
+	var fly_down := FLY_TIME * 0.55
+
+	var up := create_tween()
+	up.set_parallel(true)
+	up.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	up.tween_property(flying, "position", apex, fly_out)
+	up.tween_property(flying, "rotation", -0.04, fly_out)
+	up.tween_property(flying, "scale", Vector2.ONE * _card_scale * 1.20, fly_out)
+	up.tween_property(flying, "perspective_y", -12.0, fly_out)
+	up.tween_property(flying, "perspective_x", _pile_card.perspective_x, fly_out)
+	await up.finished
+
+	var down := create_tween()
+	down.set_parallel(true)
+	down.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	down.tween_property(flying, "position", target, fly_down)
+	down.tween_property(flying, "rotation", _pile_card.rotation, fly_down)
+	down.tween_property(flying, "scale", _pile_card.scale, fly_down)
+	down.tween_property(flying, "perspective_y", _pile_card.perspective_y, fly_down)
+	await down.finished
+
+	flying.queue_free()
+	_busy = false
+	_refresh()
+	# 玩家出了万能牌、或者轮到玩家选色，就把选色面板亮出来
+	if _rules.phase() == UnoRules.Phase.CHOOSING_COLOR \
+			and _rules.color_chooser() == LOCAL_PEER:
+		_color_picker.visible = true
 
 
 # ---------------------------------------------------------------- 输入
@@ -437,14 +518,18 @@ func _gui_input(event: InputEvent) -> void:
 ## 命中测试。牌有旋转和错切，精确判定不划算——
 ## 扇形展开的角度很小，用未变换的矩形够用。
 func _pick_card(local_pos: Vector2) -> int:
-	var half := UnoCard2D.SIZE * 0.5
-	# 从上层往下找，压在上面的先被点到
-	for i in range(_hand_cards.size() - 1, -1, -1):
+	# z_index 才是"谁压在上面"，跟数组顺序不是一回事（中间的牌压住两边的），
+	# 所以取命中里面 z_index 最大的那张。
+	var found := -1
+	var best_z := -1000
+	for i in _hand_cards.size():
 		var card: UnoCard2D = _hand_cards[i]
+		var half := UnoCard2D.SIZE * 0.5 * card.scale.x
 		var d := local_pos - card.position
-		if absf(d.x) <= half.x and absf(d.y) <= half.y:
-			return i
-	return -1
+		if absf(d.x) <= half.x and absf(d.y) <= half.y and card.z_index > best_z:
+			best_z = card.z_index
+			found = i
+	return found
 
 
 func _try_play_hand_card(index: int) -> void:
@@ -462,7 +547,8 @@ func _on_color_chosen(color: int) -> void:
 	_color_picker.visible = false
 	_rules.choose_color(LOCAL_PEER, color)
 	_set_log(tr("你把颜色定成了 %s") % UnoDeck.COLOR_NAMES[color])
-	_animate_play(_rules.top_card(), _pile_card.position, LOCAL_PEER)
+	_animate_play(_rules.top_card(),
+		Vector2(view_size().x * 0.5, view_size().y - BOTTOM_RESERVE), LOCAL_PEER)
 
 
 func _on_say_uno() -> void:

@@ -1,221 +1,213 @@
 class_name UnoCard2D
 extends Node2D
 
-## 一张 UNO 牌。用 _draw() 自己画，不用贴图——
-## 项目里还没有牌面美术，而且自绘的圆角矩形加文字在任何分辨率下都清晰，
-## 改配色也只是改几个常量。
+## 一张 UNO 牌。
 ##
-## **伪 3D 靠的是 Node2D 的 transform 三件套，不是真 3D：**
-##   rotation   扇形展开的角度
-##   scale.y    纵向压缩 —— 模拟牌往后倒下去的透视缩短
-##   skew       横向错切 —— 模拟绕竖轴转过来的侧面
+## 牌面是 UnoCardPainter 画的、被 UnoCardArt 烘成的贴图；
+## 伪 3D 是 fake3d.gdshader 在 canvas_item 里做的真透视投影。
 ##
-## 三者叠加就足够像了，而且全程 2D：没有相机、没有光照、没有 3D 场景的开销。
-## 这也是「伪 3D 卡牌 UI」这类做法的核心——把一个平面图形错切一下，
-## 眼睛就会自己脑补出体积。
+## 三张贴图（正面 / 牌背 / 阴影）共用同一个 shader，只是 y_rot 差 180 度、
+## tint 不一样。阴影就是「同一张牌面涂黑」——形状天然吻合，不用另画一张。
+##
+## 对外只暴露三件事：显示哪张牌、在扇形里的姿态、有没有被选中。
+## 具体位置由牌桌算好传进来，牌自己不猜上下文。
+##
+## **y_rot 不要超过 ±70 度**：这个 shader 在接近侧对镜头时 z 趋近 0，
+## 透视除法会把牌拉成一条巨大的竖条。实测 70 度以内都好看，
+## 90 度直接消失，135 度会炸开。
 
 const SIZE := Vector2(148, 216)
+const SHADER: Shader = preload("res://games/uno/ui/fake3d.gdshader")
 
-## 牌面配色。深色描边 + 高饱和填充，小尺寸下辨识度最高。
-const COLOR_FILL := {
-	UnoDeck.C.RED: Color(0.86, 0.24, 0.22),
-	UnoDeck.C.YELLOW: Color(0.96, 0.74, 0.13),
-	UnoDeck.C.GREEN: Color(0.24, 0.65, 0.33),
-	UnoDeck.C.BLUE: Color(0.16, 0.48, 0.88),
-	UnoDeck.C.WILD: Color(0.20, 0.20, 0.24),
-}
+## 选中时抬起来的高度和放大倍率。
+const LIFT_HEIGHT := 56.0
+const LIFT_SCALE := 1.14
+
+## 阴影的偏移量和浓度。偏移在牌的本地坐标里，会跟着牌一起转。
+const SHADOW_OFFSET := Vector2(5, 8)
+const SHADOW_ALPHA := 0.20
 
 var card := -1
 var face_up := true
-
-## 被选中时抬起来。由牌桌控制，卡牌本身不处理输入。
 var lifted := false
 
+## 绕横轴（上下仰合）。给牌堆一点"躺在桌上"的斜度。
+var perspective_x := 0.0: set = set_perspective_x
+## 绕竖轴（左右转）。扇形的每张牌靠这个错开。
+var perspective_y := 0.0: set = set_perspective_y
+
+var _shadow: Sprite2D
+var _back: Sprite2D
+var _front: Sprite2D
+
+## 扇形基准姿态，set_fan_pose 只改这几个；选中时在它们之上叠加位移。
 var _base_position := Vector2.ZERO
 var _base_rotation := 0.0
 var _base_scale := Vector2.ONE
-var _base_skew := 0.0
+var _base_px := 0.0
+var _base_py := 0.0
+var _base_z := 60
 
+
+func _init() -> void:
+	_shadow = _make_sprite(Color(0, 0, 0, SHADOW_ALPHA))
+	_shadow.position = SHADOW_OFFSET
+	add_child(_shadow)
+	_back = _make_sprite(Color(1, 1, 1, 1))
+	add_child(_back)
+	_front = _make_sprite(Color(1, 1, 1, 1))
+	add_child(_front)
+	_refresh_textures()
+
+
+func _make_sprite(tint_color: Color) -> Sprite2D:
+	var node := Sprite2D.new()
+	node.centered = true
+	# 牌在小屏上会被缩着画，不开 mipmap 的话边缘会闪
+	node.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	var material := ShaderMaterial.new()
+	material.shader = SHADER
+	material.set_shader_parameter("tint", tint_color)
+	# 关掉背面剔除。默认开着时，牌背那一张（y_rot 被减了 180 度）永远
+	# 处于背面，整张牌会只剩阴影——牌背之前就是一块灰方块。
+	# 反正摆牌的角度都控制在安全范围内，见文件头的说明。
+	material.set_shader_parameter("cull_back", false)
+	node.material = material
+	return node
+
+
+# ---------------------------------------------------------------- 牌面
 
 func set_card(value: int, revealed := true) -> void:
 	card = value
 	face_up = revealed
-	queue_redraw()
+	_refresh_textures()
 
 
-func _draw() -> void:
-	var rect := Rect2(-SIZE * 0.5, SIZE)
-	if not face_up:
-		_draw_back(rect)
-		return
-
-	var face := UnoDeck.face_of(card)
-	var color := UnoDeck.color_of(card)
-	var fill: Color = COLOR_FILL.get(color, Color.GRAY)
-
-	# 白底 + 深色描边，中间一块颜色
-	draw_style_box(_box(Color(0.98, 0.98, 1.0), 14, Color(0.15, 0.15, 0.2, 0.9), 3), rect)
-	var inner := Rect2(rect.position + Vector2(11, 11), rect.size - Vector2(22, 22))
-	draw_style_box(_box(fill, 10, Color(1, 1, 1, 0.35), 2), inner)
-
-	_draw_face_mark(face, color, inner)
-	_draw_corners(face, color)
+## 三张精灵是不是都拿到贴图了。测试用来挡住「牌画成一块灰方块」这类回归。
+func texture_ready() -> bool:
+	return _front.texture != null and _back.texture != null and _shadow.texture != null
 
 
-## 牌背。深色底加一个白圈，远看就是一张扣着的牌。
-func _draw_back(rect: Rect2) -> void:
-	draw_style_box(_box(Color(0.16, 0.17, 0.24), 14, Color(0.05, 0.05, 0.08), 3), rect)
-	var center := Vector2.ZERO
-	draw_circle(center, SIZE.x * 0.30, Color(0.86, 0.24, 0.22))
-	draw_circle(center, SIZE.x * 0.24, Color(0.16, 0.17, 0.24))
-	_draw_text("UNO", center + Vector2(0, 10), 40, Color(0.98, 0.98, 1.0))
+func _refresh_textures() -> void:
+	var front_tex := UnoCardArt.texture_of(card, true)
+	var back_tex := UnoCardArt.texture_of(-1, false)
+	_front.texture = front_tex
+	_back.texture = back_tex
+	_shadow.texture = front_tex if face_up else back_tex
+	_front.visible = face_up
+	_back.visible = not face_up
 
 
-## 牌面中央的图案。没有美术资源，就用几何形状凑——
-## 数字牌是数字，功能牌画形状，万能牌画四色扇形。
-func _draw_face_mark(face: int, color: int, inner: Rect2) -> void:
-	var center := inner.get_center()
-	match face:
-		UnoDeck.F.SKIP:
-			draw_circle(center, SIZE.x * 0.22, Color(1, 1, 1, 0.92))
-			draw_circle(center, SIZE.x * 0.22, Color(0, 0, 0, 0), false, 6.0, false)
-			draw_line(center + Vector2(-30, 30), center + Vector2(30, -30),
-				Color(0.86, 0.24, 0.22), 12.0)
-		UnoDeck.F.REVERSE:
-			# 两个反向箭头，用三角形加一条横线拼
-			for dy in [-18.0, 18.0]:
-				var tip := center + Vector2(0, dy)
-				var back := 26.0
-				draw_colored_polygon(PackedVector2Array([
-					tip, tip + Vector2(-back, -14), tip + Vector2(-back, 14),
-				]), Color(1, 1, 1, 0.95))
-				draw_line(tip + Vector2(-back, 0), tip + Vector2(back, 0),
-					Color(1, 1, 1, 0.95), 8.0)
-		UnoDeck.F.DRAW2:
-			_draw_text("+2", center + Vector2(0, 22), 64, Color(1, 1, 1, 0.96))
-		UnoDeck.F.WILD:
-			_draw_wild_wedges(center, 0)
-		UnoDeck.F.WILD4:
-			_draw_wild_wedges(center, 0)
-			_draw_text("+4", center + Vector2(0, 20), 56, Color(1, 1, 1, 0.96))
-		_:
-			_draw_text(str(face), center + Vector2(0, 30), 90, Color(1, 1, 1, 0.96))
+func set_perspective_x(value: float) -> void:
+	perspective_x = value
+	_push_perspective()
 
 
-## 万能牌的四色扇形
-func _draw_wild_wedges(center: Vector2, _unused: int) -> void:
-	var radius := SIZE.x * 0.26
-	var colors := [
-		COLOR_FILL[UnoDeck.C.RED], COLOR_FILL[UnoDeck.C.YELLOW],
-		COLOR_FILL[UnoDeck.C.GREEN], COLOR_FILL[UnoDeck.C.BLUE],
-	]
-	for i in 4:
-		var from := -PI * 0.5 + i * PI * 0.5
-		var points := PackedVector2Array([center])
-		var steps := 14
-		for s in steps + 1:
-			var angle := from + PI * 0.5 * float(s) / float(steps)
-			points.append(center + Vector2(cos(angle), sin(angle)) * radius)
-		draw_colored_polygon(points, colors[i])
-	draw_circle(center, radius * 0.42, Color(0.16, 0.17, 0.24))
+func set_perspective_y(value: float) -> void:
+	perspective_y = value
+	_push_perspective()
 
 
-## 左上和右下角的角标，跟真牌一样——叠在一起时也能认出是什么牌
-func _draw_corners(face: int, color: int) -> void:
-	var text := _face_label(face)
-	var tint: Color = Color(0.2, 0.2, 0.25) if color == UnoDeck.C.WILD else COLOR_FILL[color]
-	_draw_text(text, Vector2(-SIZE.x * 0.5 + 26, -SIZE.y * 0.5 + 34), 30, tint)
-	_draw_text(text, Vector2(SIZE.x * 0.5 - 26, SIZE.y * 0.5 - 16), 30, tint)
+## 三张精灵共用同一个姿态。哪一张显示由 _refresh_textures 决定，
+## 所以这里不给牌背额外转 180 度——那样它会翻到背面被剔除掉。
+func _push_perspective() -> void:
+	for sprite in [_shadow, _back, _front]:
+		sprite.material.set_shader_parameter("x_rot", perspective_x)
+		sprite.material.set_shader_parameter("y_rot", perspective_y)
 
 
-func _face_label(face: int) -> String:
-	match face:
-		UnoDeck.F.SKIP: return "S"
-		UnoDeck.F.REVERSE: return "R"
-		UnoDeck.F.DRAW2: return "+2"
-		UnoDeck.F.WILD: return "W"
-		UnoDeck.F.WILD4: return "+4"
-	return str(face)
+# ---------------------------------------------------------------- 姿态
+
+## 直接摆到一个绝对姿态。牌堆、牌背这种"一张牌自己待着"的地方用它。
+func place_at(pos: Vector2, rot_z: float, x_rot: float, y_rot: float,
+		size_scale := 1.0, z := 5) -> void:
+	_base_position = pos
+	_base_rotation = rot_z
+	_base_scale = Vector2(size_scale, size_scale)
+	_base_px = x_rot
+	_base_py = y_rot
+	_base_z = z
+	snap_to_pose()
 
 
-func _draw_text(text: String, center: Vector2, font_size: int, color: Color) -> void:
-	var font := ThemeDB.fallback_font
-	if font == null:
-		return
-	var extent := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
-	draw_string(font, center - Vector2(extent.x * 0.5, -extent.y * 0.28),
-		text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
-
-
-func _box(fill: Color, radius: int, border: Color, border_width: int) -> StyleBoxFlat:
-	var box := StyleBoxFlat.new()
-	box.bg_color = fill
-	box.set_corner_radius_all(radius)
-	if border_width > 0:
-		box.border_width_top = border_width
-		box.border_width_bottom = border_width
-		box.border_width_left = border_width
-		box.border_width_right = border_width
-		box.border_color = border
-	return box
-
-
-# ---------------------------------------------------------------- 伪 3D 姿态
-
-## 按「离扇形中心的格数」摆好姿态。offset 为 0 时是正中那张。
+## 摆成手牌扇形的第 offset 格。offset 为 0 是正中那张。
 ##
 ## 参数集中在一个字典里，方便对着参考项目调手感：
-##   spread   每格转多少弧度
+##   origin   扇形中心点的绝对位置
 ##   spacing  每格横向间距
+##   spread   每格绕 Z 轴转多少弧度
 ##   arc      越靠边往下掉多少（做成一个微微上拱的扇面）
-##   lean     伪 3D 强度：纵向压缩 + 横向错切都按它缩放
+##   turn     每格绕竖轴转多少度，伪 3D 的"越靠边越转过去"
+##   tilt     整把牌绕横轴的仰角
+##   scale    牌的整体缩放
 func set_fan_pose(offset: float, cfg: Dictionary = {}) -> void:
-	var spread: float = cfg.get("spread", 0.055)
+	var origin: Vector2 = cfg.get("origin", Vector2.ZERO)
 	var spacing: float = cfg.get("spacing", 92.0)
+	var spread: float = cfg.get("spread", 0.052)
 	var arc: float = cfg.get("arc", 12.0)
-	var lean: float = cfg.get("lean", 0.11)
+	var turn: float = cfg.get("turn", 8.0)
+	var tilt: float = cfg.get("tilt", 0.0)
+	var size_scale: float = cfg.get("scale", 1.0)
 
+	_base_position = origin + Vector2(offset * spacing, absf(offset) * arc)
 	_base_rotation = offset * spread
-	_base_position = Vector2(offset * spacing, absf(offset) * arc)
-	# 越靠边越「侧过去」：纵向压一点、横向错切一点
-	_base_scale = Vector2(1.0, 1.0 - absf(offset) * lean * 0.35)
-	_base_skew = offset * lean
+	_base_scale = Vector2(size_scale, size_scale)
+	_base_px = tilt
+	# 右边的牌右边缘往里收，左边的牌左边缘往里收 —— 扇形才是"放射"出去的
+	_base_py = offset * turn
+	# 中间的牌压在两边的上面，扇形才立得住
+	_base_z = int(60 - absf(offset) * 6.0)
+	snap_to_pose()
 
-	# 中间的牌压在两边上面，扇形才立得住
-	z_index = int(60 - absf(offset) * 6.0)
-	_apply_pose(0.0)
 
-
-## 选中时抬起：向上位移 + 放大 + 摆正，让玩家一眼看出选的是哪张。
-func set_lifted(value: bool) -> void:
+## 选中时抬起来：整体上移 + 放大 + 摆正，让玩家一眼看出选的是哪张。
+func set_lifted(value: bool, animate := true) -> void:
 	if lifted == value:
 		return
 	lifted = value
+	if not animate:
+		snap_to_pose()
+		return
+
+	var target := _lifted_pose()
 	var tween := create_tween()
 	tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	if lifted:
-		tween.set_parallel(true)
-		tween.tween_property(self, "position", _base_position + Vector2(0, -54), 0.16)
-		tween.tween_property(self, "scale", _base_scale * 1.14, 0.16)
-		tween.tween_property(self, "rotation", 0.0, 0.16)
-		tween.tween_property(self, "skew", 0.0, 0.16)
-		z_index = 90
-	else:
-		tween.set_parallel(true)
-		tween.tween_property(self, "position", _base_position, 0.16)
-		tween.tween_property(self, "scale", _base_scale, 0.16)
-		tween.tween_property(self, "rotation", _base_rotation, 0.16)
-		tween.tween_property(self, "skew", _base_skew, 0.16)
-		z_index = int(60 - absf((_base_position.x) / 92.0) * 6.0)
+	tween.set_parallel(true)
+	tween.tween_property(self, "position", target["position"], 0.16)
+	tween.tween_property(self, "rotation", target["rotation"], 0.16)
+	tween.tween_property(self, "scale", target["scale"], 0.16)
+	tween.tween_property(self, "perspective_x", target["px"], 0.16)
+	tween.tween_property(self, "perspective_y", target["py"], 0.16)
+	z_index = target["z"]
 
 
-## 立刻把姿态套上去，不走动画。布局重排时用（比如刚发完牌）。
+## 立刻套上姿态，不走动画。布局重排时用（比如刚发完牌）。
 func snap_to_pose() -> void:
-	_apply_pose(0.0)
+	var target := _lifted_pose()
+	position = target["position"]
+	rotation = target["rotation"]
+	scale = target["scale"]
+	perspective_x = target["px"]
+	perspective_y = target["py"]
+	z_index = target["z"]
 
 
-func _apply_pose(_unused: float) -> void:
-	position = _base_position
-	rotation = _base_rotation
-	scale = _base_scale
-	skew = _base_skew
+func _lifted_pose() -> Dictionary:
+	if lifted:
+		return {
+			"position": _base_position + Vector2(0, -LIFT_HEIGHT),
+			"rotation": 0.0,
+			"scale": _base_scale * LIFT_SCALE,
+			"px": 0.0,
+			"py": 0.0,
+			"z": 90,
+		}
+	return {
+		"position": _base_position,
+		"rotation": _base_rotation,
+		"scale": _base_scale,
+		"px": _base_px,
+		"py": _base_py,
+		"z": _base_z,
+	}
