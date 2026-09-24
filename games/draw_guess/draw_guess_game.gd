@@ -457,12 +457,12 @@ func _slot_of(peer_id: int) -> int:
 func _next_drawer_slot() -> int:
 	if _players.is_empty():
 		return -1
-	var n := _players.size()
-	for step in range(1, n + 1):
-		var slot := posmod(_drawer_slot + step, n)
-		if not _correct_at.has(int(_players[slot]["peer_id"])):
-			return slot
-	return posmod(_drawer_slot + 1, n)
+	# 单纯轮转，一个接一个。**不要跳过「已经猜对的人」**——
+	# 那是选猜词者时才该有的规则，跟谁当画手毫无关系。
+	# 原来抄错了这一条，两人局里永远回到第一个人：
+	# 第二个玩家猜对后进了「已猜对」名单，下一轮轮到他时被跳过，
+	# 于是每轮都是同一个人在画。
+	return posmod(_drawer_slot + 1, _players.size())
 
 
 func _choose_word(index: int) -> void:

@@ -23,6 +23,7 @@ func _initialize() -> void:
 	_test_timeouts()
 	_test_drawer_leaves()
 	_test_missing_word_bank()
+	_test_drawer_rotation()
 	_finish()
 
 
@@ -337,6 +338,49 @@ func _test_missing_word_bank() -> void:
 	game.start_round()
 	_check("抽不出题也报错", not _fatal_messages.is_empty())
 	_check("没有进入回合", game.get_phase() == DrawGuessGame.Phase.FINISHED)
+
+	game.free()
+
+
+# ---------------------------------------------------------------- 画手轮换
+
+func _test_drawer_rotation() -> void:
+	print("\n-- 画手轮换 --")
+	# 这条是回归测试：选下一轮画手的函数里曾经混进了「跳过已经猜对的人」，
+	# 那是选猜词者才该有的规则。两人局里后果是永远同一个人在画。
+	var game := _new_game({"rounds": 4, "round_seconds": 5})
+	game.start_round()
+
+	var order: Array = []
+	for i in 4:
+		var drawer := game.get_drawer_peer_id()
+		order.append(drawer)
+		# 推进一个完整回合：选词 -> 作画超时 -> 结算超时
+		game.on_player_input(drawer, DrawGuessMessages.encode_pick_word(0))
+		game.tick(999.0)
+		game.tick(999.0)
+
+	var unique := {}
+	for peer_id in order:
+		unique[peer_id] = true
+	_check("四回合轮出四个不同的画手", unique.size() == 4, str(order))
+
+	# 两人局最容易暴露：猜对的人下一轮必须能轮到自己画
+	var duo := DrawGuessGame.new()
+	duo.setup([
+		{"peer_id": 1, "name": "甲"},
+		{"peer_id": 2, "name": "乙"},
+	], {"rounds": 4, "round_seconds": 60, "difficulty": 1, "hints": true})
+	duo.start_round()
+	var first: int = duo.get_drawer_peer_id()
+	duo.on_player_input(first, DrawGuessMessages.encode_pick_word(0))
+	var word: String = duo.get_word_for(first)
+	duo.on_player_input(2 if first == 1 else 1, DrawGuessMessages.encode_guess(word))
+	duo.tick(999.0)
+	duo.tick(999.0)
+	_check("两人局里画手会换人", duo.get_drawer_peer_id() != first,
+		"一直是 %d" % first)
+	duo.free()
 
 	game.free()
 

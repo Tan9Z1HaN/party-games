@@ -30,6 +30,9 @@ var _lobby_address: Label
 var _lobby_players: VBoxContainer
 var _lobby_start: Button
 var _lobby_status: Label
+var _lobby_settings: VBoxContainer
+var _rounds_input: OptionButton
+var _seconds_input: OptionButton
 
 
 func _ready() -> void:
@@ -129,6 +132,35 @@ func _build_lobby() -> void:
 	_lobby_players.add_theme_constant_override("separation", 6)
 	box.add_child(_lobby_players)
 
+	# 房主在这里定回合数和每回合时长，定完立刻同步给所有人
+	_lobby_settings = VBoxContainer.new()
+	_lobby_settings.add_theme_constant_override("separation", 8)
+
+	_lobby_settings.add_child(LightTheme.label(tr("回合数"), 34))
+	_rounds_input = OptionButton.new()
+	# 0 = 按人数，够让每个人都当一次画手。默认就选它，
+	# 否则默认 3 回合、4 个人的时候会有一个人永远轮不到。
+	_rounds_input.add_item(tr("每人一次"), 0)
+	for n in [1, 2, 3, 4, 5, 6, 8, 10]:
+		_rounds_input.add_item(tr("%d 回合") % n, n)
+	_rounds_input.select(0)
+	_rounds_input.custom_minimum_size = Vector2(0, 80)
+	_rounds_input.add_theme_font_size_override("font_size", 34)
+	_rounds_input.item_selected.connect(func(_i): _push_config())
+	_lobby_settings.add_child(_rounds_input)
+
+	_lobby_settings.add_child(LightTheme.label(tr("每回合时长"), 34))
+	_seconds_input = OptionButton.new()
+	for seconds in [40, 60, 80, 100, 120, 150]:
+		_seconds_input.add_item(tr("%d 秒") % seconds, seconds)
+	_seconds_input.select(2)                 # 80 秒
+	_seconds_input.custom_minimum_size = Vector2(0, 80)
+	_seconds_input.add_theme_font_size_override("font_size", 34)
+	_seconds_input.item_selected.connect(func(_i): _push_config())
+	_lobby_settings.add_child(_seconds_input)
+
+	box.add_child(_lobby_settings)
+
 	_lobby_start = LightTheme.button(tr("开始游戏"), 44)
 	_lobby_start.pressed.connect(_on_start_pressed)
 	box.add_child(_lobby_start)
@@ -213,9 +245,34 @@ func _on_join_pressed() -> void:
 
 
 func _on_start_pressed() -> void:
-	_room.set_game("draw_guess", DEFAULT_CONFIG)
+	_room.set_game("draw_guess", _current_config())
 	if not _room.start_game():
 		_lobby_status.text = tr("开局失败：至少要两个人")
+
+
+## 回合数选「每人一次」时按当前人数算。放在开局前算，
+## 因为人数是随时会变的，选中的那一刻算出来会过期。
+func _current_config() -> Dictionary:
+	var rounds := _rounds_input.get_selected_id()
+	if rounds <= 0:
+		rounds = maxi(1, _room.get_player_count())
+	return {
+		"rounds": rounds,
+		"round_seconds": _seconds_input.get_selected_id(),
+		"difficulty": 2,
+		"hints": true,
+	}
+
+
+func _push_config() -> void:
+	if _room.is_host():
+		_room.set_game("draw_guess", _current_config())
+		_lobby_status.text = _config_text()
+
+
+func _config_text() -> String:
+	var config := _current_config()
+	return tr("回合数 %d · 每回合 %d 秒") % [int(config["rounds"]), int(config["round_seconds"])]
 
 
 func _on_joined() -> void:
@@ -277,7 +334,13 @@ func _refresh_lobby() -> void:
 			LightTheme.label("%s%s%s" % [entry["name"], suffix, ping_text], 38))
 
 	_lobby_start.visible = is_host
-	_lobby_status.text = tr("把上面的地址告诉朋友，让他们在首页填进去") if is_host else ""
+	# 设置项只有房主能改；其他人看一行摘要就行
+	_lobby_settings.visible = is_host and not bool(state["started"])
+	if is_host:
+		if _lobby_status.text.is_empty():
+			_lobby_status.text = tr("把上面的地址告诉朋友，让他们在首页填进去")
+	else:
+		_lobby_status.text = _config_text()
 
 
 func address_of_host(state: Dictionary) -> String:
