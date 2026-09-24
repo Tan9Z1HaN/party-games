@@ -86,6 +86,7 @@ var _private_word := ""
 var _remote_drawer := 0
 var _remote_hint := ""
 var _remote_revealed := ""
+var _remote_rows: Array = []
 
 var _used_words := PackedStringArray()
 var _round_rows: Array = []
@@ -669,7 +670,14 @@ func on_remote_message(payload: PackedByteArray) -> void:
 func apply_snapshot(snapshot: Dictionary) -> void:
 	if _is_authority():
 		return
+	_apply_snapshot_data(snapshot)
 
+
+## 实际套用快照内容。从 apply_snapshot 里抽出来是因为开头那道
+## 权威端守卫会让单机测试环境（没有 multiplayer peer，_is_authority()
+## 恒为真）直接返回，客户端这条路径就永远测不到——
+## 结算行丢失这个 bug 正是因此活了很久。
+func _apply_snapshot_data(snapshot: Dictionary) -> void:
 	var previous_phase := _phase
 	_phase = int(snapshot.get("phase", _phase))
 	_time_left = float(snapshot.get("time_left", _time_left))
@@ -677,6 +685,7 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 	_remote_drawer = int(snapshot.get("drawer", 0))
 	_remote_hint = String(snapshot.get("hint", ""))
 	_remote_revealed = String(snapshot.get("revealed", ""))
+	_remote_rows = snapshot.get("rows", [])
 
 	var scores = snapshot.get("scores", null)
 	if scores is Dictionary:
@@ -689,7 +698,10 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 	phase_changed.emit(_phase, _time_left)
 	scores_changed.emit(get_scores())
 	if previous_phase != _phase and _phase == Phase.ROUND_END:
-		round_settled.emit(_remote_revealed, [])
+		# 必须带上主机算好的得分行。这里曾经硬编码成 []，
+		# 于是客户端的结果页永远显示「没有人猜对」，
+		# 而房主那边是对的——两边对不上，还很难查。
+		round_settled.emit(_remote_revealed, _remote_rows)
 	if previous_phase != _phase and _phase == Phase.FINISHED:
 		game_finished.emit()
 

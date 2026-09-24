@@ -8,6 +8,8 @@ var _passed := 0
 var _failed := 0
 var _forwarded: Array = []
 var _fatal_messages: Array = []
+var _snapshot_rows: Array = []
+var _snapshot_word := ""
 
 
 func _initialize() -> void:
@@ -24,6 +26,7 @@ func _initialize() -> void:
 	_test_drawer_leaves()
 	_test_missing_word_bank()
 	_test_drawer_rotation()
+	_test_client_snapshot()
 	_finish()
 
 
@@ -381,6 +384,63 @@ func _test_drawer_rotation() -> void:
 	_check("两人局里画手会换人", duo.get_drawer_peer_id() != first,
 		"一直是 %d" % first)
 	duo.free()
+
+	game.free()
+
+
+# ---------------------------------------------------------------- 客户端快照
+
+func _test_client_snapshot() -> void:
+	print("\n-- 客户端快照 --")
+	# 回归测试：apply_snapshot 里结算行曾经硬编码成空数组，
+	# 客户端结果页永远显示「没有人猜对」。
+	# 走 _apply_snapshot_data 而不是 apply_snapshot，
+	# 因为后者开头的权威端守卫会让没有 peer 的测试环境直接返回。
+	var game := DrawGuessGame.new()
+	_snapshot_rows = []
+	_snapshot_word = ""
+	# 注意：GDScript 的 lambda 按值捕获**局部变量**，所以这里只能写成员变量。
+	# 写成局部变量的话，lambda 里赋值改的是它自己的副本，外面的看不到。
+	game.round_settled.connect(func(word, rows):
+		_snapshot_word = word
+		_snapshot_rows = rows)
+
+	game._apply_snapshot_data({
+		"phase": DrawGuessGame.Phase.DRAWING,
+		"time_left": 30.0,
+		"round_index": 1,
+		"drawer": 11,
+		"scores": {11: 100, 22: 260},
+		"guessed": [],
+		"hint": "太_（2 个字 · 自然）",
+		"revealed": "",
+		"rows": [],
+	})
+	# 断言直接读 _remote_* 字段：对应的 getter 在客户端才走这条分支，
+	# 而测试环境没有 multiplayer peer，_is_authority() 恒为真。
+	_check("作画阶段不结算", _snapshot_rows.is_empty())
+	_check("提示记录来自快照", game._remote_hint.contains("2 个字"), game._remote_hint)
+	_check("画手记录来自快照", game._remote_drawer == 11, "%d" % game._remote_drawer)
+
+	var rows := [{"peer_id": 22, "points": 260, "remaining": 30.0}]
+	game._apply_snapshot_data({
+		"phase": DrawGuessGame.Phase.ROUND_END,
+		"time_left": 7.0,
+		"round_index": 1,
+		"drawer": 11,
+		"scores": {11: 150, 22: 260},
+		"guessed": [22],
+		"hint": "",
+		"revealed": "太阳",
+		"rows": rows,
+	})
+	_check("切到结算会发一次结算事件", _snapshot_rows.size() == 1, "%d 行" % _snapshot_rows.size())
+	if not _snapshot_rows.is_empty():
+		_check("得分来自快照", int(_snapshot_rows[0]["points"]) == 260, str(_snapshot_rows[0]))
+	_check("公开答案记录来自快照", game._remote_revealed == "太阳", game._remote_revealed)
+	_check("公开答案随事件带出", _snapshot_word == "太阳", _snapshot_word)
+	_check("已猜对名单来自快照", game.has_guessed(22))
+	_check("分数来自快照", int(game.get_scores().get(22, 0)) == 260)
 
 	game.free()
 
