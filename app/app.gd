@@ -62,7 +62,6 @@ func _build_menu() -> void:
 	box.add_theme_constant_override("separation", 16)
 
 	box.add_child(LightTheme.label(tr("聚会游戏"), 112))
-	box.add_child(LightTheme.label(tr("同一 Wi-Fi 或手机热点下，各自拿手机玩"), 40))
 
 	box.add_child(LightTheme.label(tr("你的昵称"), 42))
 	_nickname = LineEdit.new()
@@ -95,11 +94,6 @@ func _build_menu() -> void:
 	var join_button := LightTheme.button(tr("加入"), 52)
 	join_button.pressed.connect(_on_join_pressed)
 	box.add_child(join_button)
-
-	# 单机同屏放最后：它是「没网时的备选」，不该盖过联机入口的优先级
-	var solo_button := LightTheme.button(tr("单机同屏玩（一台手机轮流）"), 44)
-	solo_button.pressed.connect(_on_solo_pressed)
-	box.add_child(solo_button)
 
 	_menu_status = LightTheme.label("", 30)
 	_menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -184,10 +178,6 @@ func _open_game_screen() -> bool:
 	_game_screen.exit_requested.connect(_on_game_exit_requested)
 	LightTheme.present(_game_screen)
 	return true
-
-
-func _on_solo_pressed() -> void:
-	_open_game_screen()
 
 
 func _show_lobby() -> void:
