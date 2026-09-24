@@ -47,6 +47,17 @@ func _run() -> void:
 			main._on_game_selected("uno")
 			main._on_solo_pressed()
 		, 90)
+		# 提起一张手牌：伪 3D 只在这时候出现
+		await _capture(size, tag, "table_lifted", func(main):
+			main._on_game_selected("uno")
+			main._on_solo_pressed()
+			var table = main._game_screen
+			var index := 2
+			table._selected = index
+			var card = table._hand_cards[index]
+			card.set_grab(card.position + Vector2(-42.0, 30.0))
+			table._layout_hand()
+		)
 	print("尺寸矩阵截图完成")
 	quit(0)
 

@@ -15,13 +15,13 @@ const LOCAL_PEER := 1
 const AI_DELAY := 0.85          ## AI 每步之间的停顿，太快看不清它在干什么
 const FLY_TIME := 0.34          ## 出牌飞行的时长
 
-## 扇形手感参数。和 card_2d.gd 的 set_fan_pose 对得上，
+## 手牌手感参数。和 card_2d.gd 的 set_fan_pose 对得上，
 ## 想调手感就改这里，改完跑 tools/tests/screenshot_matrix.gd 看图。
+##
+## 手牌是**平铺**的：一张挨一张横向排开，不带旋转也不带 3D 姿态。
+## 扇形那一套参数在 set_fan_pose 里都留着（spread / arc / turn / tilt），
+## 想让手牌带点角度只要在这里传值，不用改布局代码。
 const FAN_SPACING := 92.0
-const FAN_SPREAD := 0.052
-const FAN_ARC := 12.0
-const FAN_TURN := 8.0           ## 每格绕竖轴转多少度，伪 3D 的"扇开"
-const FAN_TILT := 5.0           ## 整把牌绕横轴的仰角
 
 ## 牌桌内容的宽度上限。桌面窗口拉得很宽时把牌桌收在一条竖条里居中，
 ## 否则牌堆会被甩到屏幕两端、中间空一大片。
@@ -143,6 +143,10 @@ func _build_ui() -> void:
 	var uno_button := LightTheme.button(tr("喊 UNO"), 30)
 	uno_button.pressed.connect(_on_say_uno)
 	buttons.add_child(uno_button)
+	# 也能直接点牌堆摸牌，这个按钮是给「不知道能点哪儿」的人兜底的
+	var draw_button := LightTheme.button(tr("摸牌"), 30)
+	draw_button.pressed.connect(_on_draw)
+	buttons.add_child(draw_button)
 	var pass_button := LightTheme.button(tr("过牌"), 30)
 	pass_button.pressed.connect(_on_pass)
 	buttons.add_child(pass_button)
@@ -247,11 +251,7 @@ func _layout_hand() -> void:
 
 	var card_half := UnoCard2D.SIZE.y * _card_scale * 0.5
 	var max_offset := maxf(1.0, (float(count) - 1.0) * 0.5)
-	var arc := FAN_ARC * _card_scale
-	# 最外侧的牌会顺着扇形往下掉 max_offset * arc，要一起让出来，
-	# 否则手牌会盖到底部那排按钮上。
-	var origin := Vector2(view.x * 0.5,
-		view.y - BOTTOM_RESERVE - card_half - max_offset * arc)
+	var origin := Vector2(view.x * 0.5, view.y - BOTTOM_RESERVE - card_half)
 
 	# 间距先按手感取基准值，张数多了再压，免得铺出屏幕
 	var spacing := FAN_SPACING * _card_scale
@@ -263,17 +263,12 @@ func _layout_hand() -> void:
 	var cfg := {
 		"origin": origin,
 		"spacing": spacing,
-		"spread": FAN_SPREAD,
-		"arc": arc,
-		# 张数很多时把每格的转角压回来，最外侧别超过 42 度——
-		# 超过 70 度这个透视投影会把牌拉成一条竖线。
-		"turn": minf(FAN_TURN, 42.0 / max_offset),
-		"tilt": FAN_TILT,
 		"scale": _card_scale,
 	}
 	for i in count:
 		var card: UnoCard2D = _hand_cards[i]
-		card.set_fan_pose(float(i) - max_offset, cfg)
+		# stack_index 用下标：右边的牌压在左边上面，跟手里真拿着一叠牌一样
+		card.set_fan_pose(float(i) - max_offset, cfg, i)
 		card.set_lifted(i == _selected)
 
 
@@ -328,6 +323,10 @@ func _refresh() -> void:
 		var hint := tr("轮到你了")
 		if _rules.pending_draw() > 0:
 			hint += tr("　（要摸 %d 张，或者叠牌）") % _rules.pending_draw()
+		elif _rules.drawn_this_turn():
+			hint += tr("　（出牌，或者过牌）")
+		else:
+			hint += tr("　（点牌堆摸牌）")
 		_status_label.text = hint
 	else:
 		_status_label.text = tr("%s 的回合…") % _name_of(current)
@@ -504,6 +503,10 @@ func _gui_input(event: InputEvent) -> void:
 
 	var index := _pick_card(pos)
 	if index < 0:
+		# 点空处取消选择；点牌堆就是摸牌
+		if _hit_deck(pos):
+			_on_draw()
+			return
 		_selected = -1
 		_layout_hand()
 		return
@@ -512,7 +515,16 @@ func _gui_input(event: InputEvent) -> void:
 		_try_play_hand_card(index)
 	else:
 		_selected = index
+		# 记下从牌的哪个位置抓起来，提起来时会朝那一角翻过去
+		(_hand_cards[index] as UnoCard2D).set_grab(pos)
 		_layout_hand()
+
+
+## 点牌堆的判定框。比牌本身大一圈，手机上不好点准。
+func _hit_deck(local_pos: Vector2) -> bool:
+	var half := UnoCard2D.SIZE * 0.5 * _card_scale * 1.3
+	var d := local_pos - _deck_center
+	return absf(d.x) <= half.x and absf(d.y) <= half.y
 
 
 ## 命中测试。牌有旋转和错切，精确判定不划算——
@@ -554,6 +566,67 @@ func _on_color_chosen(color: int) -> void:
 func _on_say_uno() -> void:
 	var res := _rules.say_uno(LOCAL_PEER)
 	_set_log(tr("你喊了 UNO！") if res.get("ok", false) else tr("现在不用喊") )
+	_refresh()
+
+
+## 摸牌。入口有两个：点牌堆，或者点底部那个「摸牌」按钮。
+## 规则本身管着「是不是你的回合」「本回合摸过没有」，这里只负责翻译结果。
+func _on_draw() -> void:
+	if _rules == null or _busy or _color_picker.visible:
+		return
+	var res := _rules.draw_card(LOCAL_PEER)
+	if not bool(res.get("ok", false)):
+		_set_log(tr("不能摸牌：%s") % String(res.get("error", "")))
+		return
+
+	var taken: Array = res.get("cards", [])
+	if bool(res.get("penalty", false)):
+		# 罚抽是一次摸完并直接过回合，不值得一张张飞
+		_set_log(tr("吃了 %d 张罚牌") % taken.size())
+		_sync_hand()
+		_refresh()
+		return
+
+	_set_log(tr("你摸了一张"))
+	_animate_draw()
+
+
+## 摸牌的动画：一张牌背从牌堆飞进手里，落位之后才亮出牌面。
+## 新牌先藏起来、等飞过来的那张落位再显示，否则会看到两张牌重叠一下。
+func _animate_draw() -> void:
+	_busy = true
+	_sync_hand()
+	_refresh()
+
+	var landed: UnoCard2D = _hand_cards[_hand_cards.size() - 1]
+	var target := landed.position
+	var target_scale := landed.scale
+	landed.visible = false
+
+	var flying := UnoCard2D.new()
+	flying.set_card(-1, false)
+	flying.place_at(_deck_center, 0.0, _deck_card.perspective_x,
+		_deck_card.perspective_y, _card_scale * 1.02, 80)
+	_cards_root.add_child(flying)
+
+	var out := create_tween()
+	out.set_parallel(true)
+	out.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	out.tween_property(flying, "position", target + Vector2(0, -70.0), FLY_TIME * 0.62)
+	out.tween_property(flying, "scale", target_scale, FLY_TIME * 0.62)
+	out.tween_property(flying, "perspective_x", 0.0, FLY_TIME * 0.62)
+	out.tween_property(flying, "perspective_y", 0.0, FLY_TIME * 0.62)
+	await out.finished
+
+	var drop := create_tween()
+	drop.set_parallel(true)
+	drop.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	drop.tween_property(flying, "position", target, FLY_TIME * 0.38)
+	await drop.finished
+
+	flying.queue_free()
+	landed.visible = true
+	_busy = false
 	_refresh()
 
 

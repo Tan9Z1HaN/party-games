@@ -15,6 +15,10 @@ extends Node2D
 ## **y_rot 不要超过 ±70 度**：这个 shader 在接近侧对镜头时 z 趋近 0，
 ## 透视除法会把牌拉成一条巨大的竖条。实测 70 度以内都好看，
 ## 90 度直接消失，135 度会炸开。
+##
+## 手牌**平铺展开**，平时不带任何 3D 姿态；伪 3D 只在你把某一张牌提起来的
+## 时候出现——提起来的那张会升高、放大，并朝着你抓的位置翻过去。
+## 见 set_grab / set_lifted。
 
 const SIZE := Vector2(148, 216)
 const SHADER: Shader = preload("res://games/uno/ui/fake3d.gdshader")
@@ -22,6 +26,9 @@ const SHADER: Shader = preload("res://games/uno/ui/fake3d.gdshader")
 ## 选中时抬起来的高度和放大倍率。
 const LIFT_HEIGHT := 56.0
 const LIFT_SCALE := 1.14
+
+## 提起时最多翻多少度。抓牌的一角，那一角就往观察者这边翻过来。
+const TILT_MAX := 20.0
 
 ## 阴影的偏移量和浓度。偏移在牌的本地坐标里，会跟着牌一起转。
 const SHADOW_OFFSET := Vector2(5, 8)
@@ -47,6 +54,10 @@ var _base_scale := Vector2.ONE
 var _base_px := 0.0
 var _base_py := 0.0
 var _base_z := 60
+
+## 提起来时的翻转角，由 set_grab 按"从哪儿抓起来"算出来。
+var _lift_x := 0.0
+var _lift_y := 0.0
 
 
 func _init() -> void:
@@ -131,22 +142,26 @@ func place_at(pos: Vector2, rot_z: float, x_rot: float, y_rot: float,
 	snap_to_pose()
 
 
-## 摆成手牌扇形的第 offset 格。offset 为 0 是正中那张。
+## 摆成手牌里的第 offset 格。offset 为 0 是正中那张。
 ##
-## 参数集中在一个字典里，方便对着参考项目调手感：
-##   origin   扇形中心点的绝对位置
+## 默认是**平铺**：只按 offset 平移，不带旋转、不带 3D 姿态。
+## 参数集中在一个字典里，以后想换成扇形只要改这里，不用动牌桌：
+##   origin   整排牌中心点的绝对位置
 ##   spacing  每格横向间距
 ##   spread   每格绕 Z 轴转多少弧度
-##   arc      越靠边往下掉多少（做成一个微微上拱的扇面）
-##   turn     每格绕竖轴转多少度，伪 3D 的"越靠边越转过去"
-##   tilt     整把牌绕横轴的仰角
+##   arc      越靠边往下掉多少
+##   turn     每格绕竖轴转多少度
+##   tilt     整排牌绕横轴的仰角
 ##   scale    牌的整体缩放
-func set_fan_pose(offset: float, cfg: Dictionary = {}) -> void:
+##
+## stack_index 是这张牌在整手牌里的序号，只决定谁压谁（大的在上面）。
+## 传 -1 就退回"中间压两边"。
+func set_fan_pose(offset: float, cfg: Dictionary = {}, stack_index := -1) -> void:
 	var origin: Vector2 = cfg.get("origin", Vector2.ZERO)
 	var spacing: float = cfg.get("spacing", 92.0)
-	var spread: float = cfg.get("spread", 0.052)
-	var arc: float = cfg.get("arc", 12.0)
-	var turn: float = cfg.get("turn", 8.0)
+	var spread: float = cfg.get("spread", 0.0)
+	var arc: float = cfg.get("arc", 0.0)
+	var turn: float = cfg.get("turn", 0.0)
 	var tilt: float = cfg.get("tilt", 0.0)
 	var size_scale: float = cfg.get("scale", 1.0)
 
@@ -154,14 +169,32 @@ func set_fan_pose(offset: float, cfg: Dictionary = {}) -> void:
 	_base_rotation = offset * spread
 	_base_scale = Vector2(size_scale, size_scale)
 	_base_px = tilt
-	# 右边的牌右边缘往里收，左边的牌左边缘往里收 —— 扇形才是"放射"出去的
 	_base_py = offset * turn
-	# 中间的牌压在两边的上面，扇形才立得住
-	_base_z = int(60 - absf(offset) * 6.0)
+	var stack := float(stack_index) if stack_index >= 0 else -absf(offset)
+	_base_z = int(float(cfg.get("z_base", 60.0)) + stack)
 	snap_to_pose()
 
 
-## 选中时抬起来：整体上移 + 放大 + 摆正，让玩家一眼看出选的是哪张。
+## 记下「从牌的哪个位置抓起来」。提起来的时候朝着那一角翻过去。
+## point 是牌桌坐标；传 Vector2.INF 表示不翻，正着提起来。
+func set_grab(point: Vector2) -> void:
+	if point == Vector2.INF:
+		_lift_x = 0.0
+		_lift_y = 0.0
+	else:
+		# 以没提起来时的那张牌为参照，才知道手指落在牌的哪一侧
+		var half := maxf(1.0, SIZE.x * 0.5 * _base_scale.x)
+		var rel := (point - _base_position) / half
+		# 抓哪边，哪边就往观察者这边翻过来
+		_lift_x = clampf(rel.y, -1.0, 1.0) * TILT_MAX
+		_lift_y = -clampf(rel.x, -1.0, 1.0) * TILT_MAX
+	if lifted:
+		perspective_x = _lift_x
+		perspective_y = _lift_y
+
+
+## 选中时抬起来：整体上移 + 放大，并翻到抓取的方向。
+## 位移和缩放走 tween，姿态立刻切过去——提着牌的时候它要跟着手指实时动。
 func set_lifted(value: bool, animate := true) -> void:
 	if lifted == value:
 		return
@@ -175,10 +208,10 @@ func set_lifted(value: bool, animate := true) -> void:
 	tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tween.set_parallel(true)
 	tween.tween_property(self, "position", target["position"], 0.16)
-	tween.tween_property(self, "rotation", target["rotation"], 0.16)
 	tween.tween_property(self, "scale", target["scale"], 0.16)
-	tween.tween_property(self, "perspective_x", target["px"], 0.16)
-	tween.tween_property(self, "perspective_y", target["py"], 0.16)
+	rotation = target["rotation"]
+	perspective_x = target["px"]
+	perspective_y = target["py"]
 	z_index = target["z"]
 
 
@@ -199,8 +232,8 @@ func _lifted_pose() -> Dictionary:
 			"position": _base_position + Vector2(0, -LIFT_HEIGHT),
 			"rotation": 0.0,
 			"scale": _base_scale * LIFT_SCALE,
-			"px": 0.0,
-			"py": 0.0,
+			"px": _lift_x,
+			"py": _lift_y,
 			"z": 90,
 		}
 	return {

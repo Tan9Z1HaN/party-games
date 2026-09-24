@@ -41,6 +41,8 @@ func _run() -> void:
 	_test_initial_state()
 	_test_fake_3d_pose()
 	await _test_render_every_state()
+	await _test_draw()
+	_test_color_picker_pops()
 	_finish()
 
 
@@ -61,31 +63,57 @@ func _test_initial_state() -> void:
 			and _scene._rules.color_chooser() == 1))
 
 
-## 伪 3D 是 shader 里的透视投影，姿态就靠绕横轴/竖轴两个角度。
-## 全是一堆 0 的话，牌看着就是平的。
+## 手牌是平铺展开的：一张挨一张横着排，不带旋转也不带 3D 姿态。
+## 伪 3D 只在「提起一张牌」的时候出现。
 func _test_fake_3d_pose() -> void:
-	print("\n-- 伪 3D 姿态 --")
-	var first = _scene._hand_cards[0]
-	var last = _scene._hand_cards[_scene._hand_cards.size() - 1]
-	_check("边上的牌有旋转", absf(first.rotation) > 0.001,
-		"rotation=%f" % first.rotation)
-	_check("边上的牌绕竖轴转过去了", absf(first.perspective_y) > 0.5,
-		"y_rot=%f" % first.perspective_y)
-	_check("两端的绕轴方向相反",
-		signf(first.perspective_y) != signf(last.perspective_y),
-		"%f vs %f" % [first.perspective_y, last.perspective_y])
-	_check("整把牌有仰角", absf(first.perspective_x) > 0.5,
-		"x_rot=%f" % first.perspective_x)
-	# 超过 70 度这个投影会把牌拉成一条巨大的竖条，实测过
-	_check("绕轴角度都在安全范围内",
-		absf(first.perspective_y) < 70.0 and absf(last.perspective_y) < 70.0,
-		"%f / %f" % [first.perspective_y, last.perspective_y])
-	_check("中间的牌压在两端上面",
-		int(_scene._hand_cards[3].z_index) > int(first.z_index),
-		"%d vs %d" % [_scene._hand_cards[3].z_index, first.z_index])
+	print("\n-- 手牌平铺 / 提起才有伪 3D --")
+	var cards = _scene._hand_cards
+	var first = cards[0]
+	var last = cards[cards.size() - 1]
+
+	var flat := true
+	var detail := ""
+	for card in cards:
+		if absf(card.rotation) > 0.0001 or absf(card.perspective_x) > 0.0001 \
+				or absf(card.perspective_y) > 0.0001:
+			flat = false
+			detail = "rotation=%f x=%f y=%f" % [card.rotation,
+				card.perspective_x, card.perspective_y]
+	_check("手牌是平铺的（没有角度也没有 3D 姿态）", flat, detail)
+	_check("手牌在同一条水平线上",
+		is_equal_approx(first.position.y, last.position.y),
+		"%f vs %f" % [first.position.y, last.position.y])
+	_check("手牌从左到右依次排开", first.position.x < last.position.x,
+		"%f vs %f" % [first.position.x, last.position.x])
+	_check("右边的牌压在左边上面", int(cards[1].z_index) > int(first.z_index),
+		"%d vs %d" % [cards[1].z_index, first.z_index])
 	_check("每张牌都拿到了牌面贴图",
 		_scene._pile_card.texture_ready() and _scene._deck_card.texture_ready()
 			and first.texture_ready())
+
+	# 提起最右边那张，并且是从它的右半边抓起来的
+	var lifted_card = last
+	lifted_card.set_grab(lifted_card.position + Vector2(40, 0))
+	lifted_card.set_lifted(true, false)
+	_check("提起来会向上位移",
+		lifted_card.position.y < lifted_card._base_position.y,
+		"%f vs %f" % [lifted_card.position.y, lifted_card._base_position.y])
+	_check("提起来会放大", lifted_card.scale.x > first.scale.x,
+		"%f vs %f" % [lifted_card.scale.x, first.scale.x])
+	_check("提起来才出现 3D 姿态", absf(lifted_card.perspective_y) > 0.5,
+		"y_rot=%f" % lifted_card.perspective_y)
+	_check("抓右边就往右翻", lifted_card.perspective_y < 0.0,
+		"y_rot=%f" % lifted_card.perspective_y)
+	_check("提起的牌压在整手牌上面",
+		int(lifted_card.z_index) > int(cards[cards.size() - 2].z_index),
+		"%d vs %d" % [lifted_card.z_index, cards[cards.size() - 2].z_index])
+
+	# 效果是自洽的：放回去就回到平铺
+	lifted_card.set_lifted(false, false)
+	_check("放回去之后又是平的",
+		absf(lifted_card.perspective_y) < 0.0001
+			and absf(lifted_card.rotation) < 0.0001,
+		"y_rot=%f rotation=%f" % [lifted_card.perspective_y, lifted_card.rotation])
 
 
 ## 把引擎跑到结束，每一步都刷新一次界面。
@@ -113,7 +141,9 @@ func _test_render_every_state() -> void:
 	_scene._sync_hand()
 	_scene._refresh()
 	_check("整局能跑完", rules.is_finished(), "%d 步" % steps)
-	_check("过程中出现过选色阶段", saw_choosing_color)
+	# 这一局出不出选色阶段取决于洗牌，硬断言会随机翻车（踩过一次）。
+	# 选色界面本身由 _test_color_picker_pops 确定性地覆盖。
+	print("      （这一局出现过选色阶段：%s）" % ("是" if saw_choosing_color else "否"))
 	_check("结束后状态行显示赢家", _scene._status_label.text.contains(
 		_scene._name_of(rules.winner())), _scene._status_label.text)
 	_check("结束后界面没崩", _scene._hand_cards.size() == rules.hand_count(1),
@@ -122,7 +152,63 @@ func _test_render_every_state() -> void:
 	# 这个状态压根不会出现，断言会随机翻车。改成下面确定性地摆一个局面。
 
 	_test_long_hand_layout(rules)
-	_test_color_picker_pops()
+
+
+## 摸牌。之前压根没有摸牌的入口——玩家点了一圈都动不了，
+## 只能干看着「没摸牌就不能过」。
+func _test_draw() -> void:
+	print("\n-- 摸牌 --")
+	# 先把上一步可能还在飞的那张牌等完，否则 _busy 挡着摸不了
+	for i in 40:
+		await process_frame
+	_check("出牌动画跑完后不再忙碌", not _scene._busy)
+
+	var rules: UnoRules = _scene._rules
+	# 摆一个「轮到本机、桌面红 5、手里只有一张出不掉的蓝 9」的局面
+	var discard: Array[int] = [UnoDeck.make(UnoDeck.C.RED, UnoDeck.F.N5)]
+	rules._discard = discard
+	rules._order = [1, 2, 3]
+	rules._cursor = 0
+	rules._direction = 1
+	rules._phase = UnoRules.Phase.PLAYING
+	rules._pending_draw = 0
+	rules._pending_face = -1
+	rules._drawn_this_turn = false
+	rules._winner = 0
+	rules._uno_flag = {}
+	var hand: Array[int] = [UnoDeck.make(UnoDeck.C.BLUE, UnoDeck.F.N9)]
+	rules._hands[1] = hand
+	_scene._selected = -1
+	_scene._sync_hand()
+	_scene._layout()
+	_scene._refresh()
+
+	_check("牌堆的判定框认得出牌堆中心", _scene._hit_deck(_scene._deck_center))
+	_check("手牌区不会被当成牌堆",
+		not _scene._hit_deck(_scene._hand_cards[0].position),
+		"hand=%s deck=%s" % [_scene._hand_cards[0].position, _scene._deck_center])
+
+	var before := rules.hand_count(1)
+	_scene._on_draw()
+	_check("摸牌之后手牌多了一张", rules.hand_count(1) == before + 1,
+		"%d -> %d" % [before, rules.hand_count(1)])
+	_check("界面上的手牌也跟着多了",
+		_scene._hand_cards.size() == before + 1,
+		"%d" % _scene._hand_cards.size())
+	_check("同一回合不能摸第二次",
+		not bool(rules.draw_card(1).get("ok", false)))
+	# 家规 auto_pass 开着：摸到出不掉的牌会直接过回合，那时提示语该是下家的
+	if rules.current_player() == 1:
+		_check("摸过之后提示改成出牌或过牌",
+			_scene._status_label.text.contains("过牌"), _scene._status_label.text)
+	else:
+		print("      （摸到的那张出不掉，auto_pass 直接过回合了）")
+
+	# 等飞牌动画跑完再往下走
+	for i in 60:
+		await process_frame
+	_check("摸牌动画结束后恢复可操作", not _scene._busy)
+	_check("摸到的那张牌露出来了", _scene._hand_cards[before].visible)
 
 
 ## 本机出万能牌 -> 进入选色阶段 -> 面板弹出来 -> 选完收回去。

@@ -185,6 +185,12 @@ func pending_draw() -> int:
 	return _pending_draw
 
 
+## 本回合是不是已经摸过牌了。界面用它决定状态行的提示语：
+## 没摸过提示"点牌堆摸牌"，摸过了提示"出牌，或者过牌"。
+func drawn_this_turn() -> bool:
+	return _drawn_this_turn
+
+
 ## 只剩 1 张但还没喊 UNO 的人。别人可以抓他。
 func uno_pending(peer_id: int) -> bool:
 	return bool(_uno_flag.get(peer_id, false))
