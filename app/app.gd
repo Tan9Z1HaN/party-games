@@ -5,16 +5,6 @@ extends Control
 ## Room 是本场景的子节点，路径固定为 /root/Main/Room ——
 ## 联网那条链路全靠它，改动节点树形状会让 RPC 静默失效。
 
-const GAME_SCENE := "res://games/draw_guess/main.tscn"
-
-## 大厅里暂时只用一个固定配置。等这一版跑通了再加配置界面。
-const DEFAULT_CONFIG := {
-	"rounds": 3,
-	"round_seconds": 80,
-	"difficulty": 2,
-	"hints": true,
-}
-
 var _room: Room
 var _menu: PanelContainer
 var _lobby: PanelContainer
@@ -31,8 +21,15 @@ var _lobby_players: VBoxContainer
 var _lobby_start: Button
 var _lobby_status: Label
 var _lobby_settings: VBoxContainer
-var _rounds_input: OptionButton
-var _seconds_input: OptionButton
+var _game_picker: OptionButton
+var _config_box: VBoxContainer
+
+## 当前选中的游戏 id。第一个注册的游戏就是默认值。
+var _selected_game := ""
+
+## 配置项：id -> { item, caption, widget }。
+## 存 item 和 caption 是为了改值时能重新拼标题文字（"回合数：3"）。
+var _config_rows := {}
 
 
 func _ready() -> void:
@@ -132,32 +129,32 @@ func _build_lobby() -> void:
 	_lobby_players.add_theme_constant_override("separation", 6)
 	box.add_child(_lobby_players)
 
-	# 房主在这里定回合数和每回合时长，定完立刻同步给所有人
+	# 玩什么、怎么配，全部由注册表和游戏自己声明的 schema 决定。
+	# 这个文件里不该出现具体游戏的字段名。
 	_lobby_settings = VBoxContainer.new()
-	_lobby_settings.add_theme_constant_override("separation", 8)
+	_lobby_settings.add_theme_constant_override("separation", 10)
 
-	_lobby_settings.add_child(LightTheme.label(tr("回合数"), 34))
-	_rounds_input = OptionButton.new()
-	# 0 = 按人数，够让每个人都当一次画手。默认就选它，
-	# 否则默认 3 回合、4 个人的时候会有一个人永远轮不到。
-	_rounds_input.add_item(tr("每人一次"), 0)
-	for n in [1, 2, 3, 4, 5, 6, 8, 10]:
-		_rounds_input.add_item(tr("%d 回合") % n, n)
-	_rounds_input.select(0)
-	_rounds_input.custom_minimum_size = Vector2(0, 80)
-	_rounds_input.add_theme_font_size_override("font_size", 34)
-	_rounds_input.item_selected.connect(func(_i): _push_config())
-	_lobby_settings.add_child(_rounds_input)
+	_lobby_settings.add_child(LightTheme.label(tr("玩什么"), 34))
 
-	_lobby_settings.add_child(LightTheme.label(tr("每回合时长"), 34))
-	_seconds_input = OptionButton.new()
-	for seconds in [40, 60, 80, 100, 120, 150]:
-		_seconds_input.add_item(tr("%d 秒") % seconds, seconds)
-	_seconds_input.select(2)                 # 80 秒
-	_seconds_input.custom_minimum_size = Vector2(0, 80)
-	_seconds_input.add_theme_font_size_override("font_size", 34)
-	_seconds_input.item_selected.connect(func(_i): _push_config())
-	_lobby_settings.add_child(_seconds_input)
+	_game_picker = OptionButton.new()
+	_game_picker.custom_minimum_size = Vector2(0, 80)
+	_game_picker.add_theme_font_size_override("font_size", 32)
+	for entry in GamesCatalog.entries():
+		_game_picker.add_item("%s（%d~%d 人 · 约 %d 分钟）" % [
+			entry["name"], int(entry["min_players"]),
+			int(entry["max_players"]), int(entry["est_minutes"])])
+		_game_picker.set_item_metadata(_game_picker.item_count - 1, String(entry["id"]))
+		if _selected_game.is_empty():
+			_selected_game = String(entry["id"])
+	if _game_picker.item_count > 0:
+		_game_picker.select(0)
+	_game_picker.item_selected.connect(_on_game_picked)
+	_lobby_settings.add_child(_game_picker)
+
+	_config_box = VBoxContainer.new()
+	_config_box.add_theme_constant_override("separation", 12)
+	_lobby_settings.add_child(_config_box)
+	_rebuild_config()
 
 	box.add_child(_lobby_settings)
 
@@ -180,6 +177,83 @@ func _build_lobby() -> void:
 
 # ---------------------------------------------------------------- 流程
 
+func _on_game_picked(index: int) -> void:
+	_selected_game = String(_game_picker.get_item_metadata(index))
+	_rebuild_config()
+	_push_config()
+
+
+## 按当前游戏的 get_config_schema() 铺一遍配置控件。
+## 加一款新游戏时这个函数一个字都不用改。
+func _rebuild_config() -> void:
+	LightTheme.clear_children(_config_box)
+	_config_rows.clear()
+	for item in GamesCatalog.schema_for(_selected_game):
+		var id := String(item["id"])
+		var caption := LightTheme.label("", 28)
+		var widget := _make_config_widget(item)
+		if widget == null:
+			push_warning("配置项类型不支持：%s" % String(item.get("type", "?")))
+			continue
+		_config_rows[id] = {"item": item, "caption": caption, "widget": widget}
+		_config_box.add_child(caption)
+		_config_box.add_child(widget)
+	_refresh_captions()
+
+
+## bool 用开关按钮（不用 CheckButton：它的勾选图标来自默认深色主题，
+## 在浅色底上几乎看不见），int 用滑杆，enum 用下拉。
+func _make_config_widget(item: Dictionary) -> Control:
+	match String(item.get("type", "")):
+		"bool":
+			var toggle := LightTheme.button("", 28)
+			toggle.toggle_mode = true
+			toggle.button_pressed = bool(item["default"])
+			toggle.pressed.connect(_on_config_changed)
+			return toggle
+		"int":
+			var slider := HSlider.new()
+			slider.min_value = float(item["min"])
+			slider.max_value = float(item["max"])
+			slider.step = 1
+			slider.value = float(item["default"])
+			slider.custom_minimum_size = Vector2(0, 48)
+			slider.value_changed.connect(func(_v): _on_config_changed())
+			return slider
+		"enum":
+			var picker := OptionButton.new()
+			picker.custom_minimum_size = Vector2(0, 72)
+			picker.add_theme_font_size_override("font_size", 30)
+			for option in item["options"]:
+				picker.add_item(String(option["label"]))
+				picker.set_item_metadata(picker.item_count - 1, option["value"])
+				if option["value"] == item["default"]:
+					picker.select(picker.item_count - 1)
+			picker.item_selected.connect(func(_i): _on_config_changed())
+			return picker
+	return null
+
+
+func _on_config_changed() -> void:
+	_refresh_captions()
+	_push_config()
+
+
+func _refresh_captions() -> void:
+	for id in _config_rows:
+		var row: Dictionary = _config_rows[id]
+		var caption: Label = row["caption"]
+		var widget: Control = row["widget"]
+		var label := String(row["item"]["label"])
+		if widget is Button:
+			var on_text := tr("开") if (widget as Button).button_pressed else tr("关")
+			caption.text = "%s：%s" % [label, on_text]
+		elif widget is HSlider:
+			caption.text = "%s：%d" % [label, int((widget as HSlider).value)]
+		else:
+			caption.text = label
+
+
 func _show_menu(message := "") -> void:
 	if _game_screen != null:
 		_game_screen.queue_free()
@@ -193,16 +267,20 @@ func _show_menu(message := "") -> void:
 ## 装载对局界面。单机和联机用的是同一个场景：
 ## 单机进来后会停在自己的设置页（选人数、回合数那些），
 ## 联机则由 setup_networked() 直接进入对局。
-func _open_game_screen() -> bool:
+func _open_game_screen(game_id: String) -> bool:
 	_menu.visible = false
 	_lobby.visible = false
 	if _game_screen != null:
 		_game_screen.queue_free()
 		_game_screen = null
 
-	var scene := load(GAME_SCENE)
+	var scene_path := GamesCatalog.scene_for(game_id)
+	if scene_path.is_empty():
+		_on_connection_lost(tr("没有注册这个游戏：%s") % game_id)
+		return false
+	var scene: PackedScene = load(scene_path)
 	if scene == null:
-		_on_connection_lost(tr("加载游戏界面失败：%s") % GAME_SCENE)
+		_on_connection_lost(tr("加载游戏界面失败：%s") % scene_path)
 		return false
 
 	_game_screen = scene.instantiate()
@@ -245,34 +323,62 @@ func _on_join_pressed() -> void:
 
 
 func _on_start_pressed() -> void:
-	_room.set_game("draw_guess", _current_config())
+	_room.set_game(_selected_game, _current_config())
+	var need := int(GamesCatalog.meta_for(_selected_game).get("min_players", 2))
+	if _room.get_player_count() < need:
+		_lobby_status.text = tr("%s 至少要 %d 个人") % [
+			GamesCatalog.display_name(_selected_game), need]
+		return
 	if not _room.start_game():
-		_lobby_status.text = tr("开局失败：至少要两个人")
+		_lobby_status.text = tr("开局失败")
 
 
-## 回合数选「每人一次」时按当前人数算。放在开局前算，
-## 因为人数是随时会变的，选中的那一刻算出来会过期。
+## 配置全部从控件读回。这里不认识任何具体字段——
+## 加一款新游戏时这个函数也不用改。
 func _current_config() -> Dictionary:
-	var rounds := _rounds_input.get_selected_id()
-	if rounds <= 0:
-		rounds = maxi(1, _room.get_player_count())
-	return {
-		"rounds": rounds,
-		"round_seconds": _seconds_input.get_selected_id(),
-		"difficulty": 2,
-		"hints": true,
-	}
+	var config := GamesCatalog.default_config(_selected_game)
+	for id in _config_rows:
+		var widget: Control = _config_rows[id]["widget"]
+		if widget is Button:
+			config[id] = (widget as Button).button_pressed
+		elif widget is HSlider:
+			config[id] = int((widget as HSlider).value)
+		elif widget is OptionButton:
+			config[id] = (widget as OptionButton).get_selected_id()
+	return config
 
 
 func _push_config() -> void:
 	if _room.is_host():
-		_room.set_game("draw_guess", _current_config())
+		_room.set_game(_selected_game, _current_config())
 		_lobby_status.text = _config_text()
 
 
+## 给非房主看的一行摘要。配置项从房间里取，标签从游戏的 schema 取，
+## 所以客户端也能正确显示别人选了什么。
 func _config_text() -> String:
-	var config := _current_config()
-	return tr("回合数 %d · 每回合 %d 秒") % [int(config["rounds"]), int(config["round_seconds"])]
+	var state := _room.get_state()
+	var game_id := String(state.get("game_id", _selected_game))
+	var config: Dictionary = state.get("config", {})
+	var parts := PackedStringArray()
+	parts.append(GamesCatalog.display_name(game_id))
+	for item in GamesCatalog.schema_for(game_id):
+		var value = config.get(item["id"], item["default"])
+		parts.append("%s %s" % [String(item["label"]), _format_config_value(item, value)])
+	return " · ".join(parts)
+
+
+func _format_config_value(item: Dictionary, value) -> String:
+	match String(item.get("type", "")):
+		"bool":
+			return tr("开") if value else tr("关")
+		"enum":
+			for option in item["options"]:
+				if option["value"] == value:
+					return String(option["label"])
+			return str(value)
+		_:
+			return str(value)
 
 
 func _on_joined() -> void:
@@ -337,7 +443,13 @@ func _refresh_lobby() -> void:
 	# 设置项只有房主能改；其他人看一行摘要就行
 	_lobby_settings.visible = is_host and not bool(state["started"])
 	if is_host:
-		if _lobby_status.text.is_empty():
+		var need := int(GamesCatalog.meta_for(_selected_game).get("min_players", 2))
+		var missing := need - _room.get_player_count()
+		_lobby_start.disabled = missing > 0
+		if missing > 0:
+			_lobby_status.text = tr("还差 %d 个人才能开始 %s") % [
+				missing, GamesCatalog.display_name(_selected_game)]
+		elif _lobby_status.text.is_empty():
 			_lobby_status.text = tr("把上面的地址告诉朋友，让他们在首页填进去")
 	else:
 		_lobby_status.text = _config_text()
@@ -351,7 +463,7 @@ func address_of_host(state: Dictionary) -> String:
 
 
 func _on_game_started(game_id: String, config: Dictionary) -> void:
-	if not _open_game_screen():
+	if not _open_game_screen(game_id):
 		return
 	_game_screen.setup_networked(_room, _room.get_state()["players"], config)
 

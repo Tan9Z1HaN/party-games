@@ -24,6 +24,7 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
 
 $suites = @(
     'res://tools/tests/export_config.gd',
+    'res://tools/tests/catalog.gd',
     'res://drawing/tests/run_tests.gd',
     'res://games/draw_guess/tests/run_tests.gd',
     'res://games/draw_guess/tests/smoke_scene.gd'
