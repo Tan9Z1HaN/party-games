@@ -36,10 +36,18 @@ func _test_word_bank() -> void:
 	print("\n-- 词库 --")
 	var bank := WordBank.load_default()
 	_check("能加载", bank.total() > 0)
-	_check("总数 200", bank.total() == 200, "得到 %d" % bank.total())
-	_check("简单档 >= 60", bank.count_of(1) >= 60, "%d" % bank.count_of(1))
-	_check("中等档 >= 50", bank.count_of(2) >= 50, "%d" % bank.count_of(2))
-	_check("困难档 >= 50", bank.count_of(3) >= 50, "%d" % bank.count_of(3))
+	_check("词库规模够用", bank.total() >= 700, "得到 %d" % bank.total())
+	_check("简单档 >= 200", bank.count_of(1) >= 200, "%d" % bank.count_of(1))
+	_check("中等档 >= 200", bank.count_of(2) >= 200, "%d" % bank.count_of(2))
+	_check("困难档 >= 150", bank.count_of(3) >= 150, "%d" % bank.count_of(3))
+
+	# 手写词库最容易出的问题就是重复，重复词会让同一局抽到两次
+	var all := bank.all_words()
+	var unique := {}
+	for word in all:
+		unique[word] = true
+	_check("词库没有重复词", unique.size() == all.size(),
+		"%d/%d" % [unique.size(), all.size()])
 
 	var picked := bank.pick(1, 3, PackedStringArray())
 	_check("抽满 3 个", picked.size() == 3, "%d" % picked.size())
@@ -57,7 +65,8 @@ func _test_word_bank() -> void:
 	_check("排除已用词", clean)
 
 	var over := bank.pick(1, 999, PackedStringArray())
-	_check("要得比库存多也不崩", over.size() > 0 and over.size() <= 200)
+	_check("要得比库存多也不崩", over.size() > 0 and over.size() <= bank.total(),
+		"要 999 拿到 %d" % over.size())
 
 
 func _test_normalize() -> void:
