@@ -18,6 +18,10 @@ const REGISTRY := {
 		"logic": "res://games/draw_guess/draw_guess_game.gd",
 		"scene": "res://games/draw_guess/main.tscn",
 	},
+	"uno": {
+		"logic": "res://games/uno/uno_game.gd",
+		"scene": "res://games/uno/main.tscn",
+	},
 }
 
 ## 元信息与配置项缓存。每次查都 new 一个游戏对象太浪费，
@@ -53,6 +57,10 @@ static func entries() -> Array:
 			"min_players": int(meta.get("min_players", 2)),
 			"max_players": int(meta.get("max_players", 8)),
 			"est_minutes": int(meta.get("est_minutes", 5)),
+			# 能力标记：游戏自己声明支不支持单机 / 联机。
+			# 大厅和菜单按这个决定显示哪些入口，而不是靠判断游戏 id。
+			"solo": bool(meta.get("solo", false)),
+			"online": bool(meta.get("online", true)),
 		})
 	return out
 

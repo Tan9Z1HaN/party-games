@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_test_scoring()
 	_test_pile_recycle()
 	_test_determinism()
+	_test_ai_full_games()
 	_finish()
 
 
@@ -417,6 +418,68 @@ func _test_determinism() -> void:
 	var c := _new_rules({}, 54321)
 	_check("不同种子发不同的牌", a.hand_of(P1) != c.hand_of(P1))
 	_check("起始牌也一致", a.top_card() == b.top_card())
+
+
+# ---------------------------------------------------------------- AI 整局
+
+## 让三个 AI 自己把整局打完。
+##
+## 这条比任何单点测试都值钱：它把引擎放到「真实对局」的压力下跑，
+## 死循环、非法状态、牌堆洗回出错、计分对不上，都会在这里暴露。
+func _test_ai_full_games() -> void:
+	print("\n-- AI 自己打完整局 --")
+	for seed_value in [1, 2, 3, 7, 99, 2024]:
+		var rules := _new_rules({}, seed_value)
+		var steps := 0
+		while not rules.is_finished() and steps < 3000:
+			steps += 1
+			_drive_ai_once(rules)
+
+		_check("种子 %d 能打完" % seed_value, rules.is_finished(), "%d 步还没结束" % steps)
+		if not rules.is_finished():
+			continue
+		_check("种子 %d 有赢家" % seed_value, rules.winner() != 0, "%d" % rules.winner())
+		_check("种子 %d 赢家手牌为空" % seed_value, rules.hand_count(rules.winner()) == 0)
+
+		var scores := rules.round_scores()
+		var total := 0
+		for peer_id in scores:
+			total += int(scores[peer_id])
+		_check("种子 %d 分数非负且只算赢家" % seed_value,
+			total > 0 and int(scores.get(rules.winner(), 0)) == total,
+			str(scores))
+
+
+## 让当前行动的一方走一步。AI 和真人在规则层面走的是同一套动作，
+## 所以这段既能测 AI，也能当「自动玩家」用。
+func _drive_ai_once(rules: UnoRules) -> void:
+	var peer := rules.current_player()
+	if rules.phase() == UnoRules.Phase.CHOOSING_COLOR:
+		rules.choose_color(peer, UnoAi.choose_color(rules, peer))
+		return
+
+	var card := UnoAi.choose_card(rules, peer)
+	if card >= 0:
+		_ai_play(rules, peer, card)
+		return
+
+	var drew := rules.draw_card(peer)
+	if bool(drew.get("playable", false)):
+		var again := UnoAi.choose_card(rules, peer)
+		if again >= 0:
+			_ai_play(rules, peer, again)
+			return
+	if rules.current_player() == peer:
+		rules.pass_turn(peer)
+
+
+func _ai_play(rules: UnoRules, peer: int, card: int) -> void:
+	if not UnoDeck.is_wild(card):
+		rules.play_card(peer, card)
+		return
+	rules.play_card(peer, card)
+	if rules.phase() == UnoRules.Phase.CHOOSING_COLOR:
+		rules.choose_color(peer, UnoAi.choose_color(rules, peer))
 
 
 # ---------------------------------------------------------------- 汇总

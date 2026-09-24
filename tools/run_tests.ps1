@@ -28,6 +28,7 @@ $suites = @(
     'res://drawing/tests/run_tests.gd',
     'res://games/draw_guess/tests/run_tests.gd',
     'res://games/uno/tests/run_tests.gd',
+    'res://games/uno/tests/smoke_scene.gd',
     'res://games/draw_guess/tests/smoke_scene.gd'
 )
 

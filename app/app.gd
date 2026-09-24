@@ -12,6 +12,12 @@ var _lobby: PanelContainer
 var _game_screen: Control = null
 
 var _menu_game: Label
+var _host_label: Label
+var _host_button: Button
+var _solo_button: Button
+var _join_label: Label
+var _join_button: Button
+var _address_row: HBoxContainer
 var _nickname: LineEdit
 var _ip: LineEdit
 var _port: LineEdit
@@ -109,30 +115,38 @@ func _build_menu() -> void:
 	_nickname.custom_minimum_size = Vector2(0, 92)
 	box.add_child(_nickname)
 
-	box.add_child(LightTheme.label(tr("创建房间"), 42))
-	var host_button := LightTheme.button(tr("我是房主，建房"), 52)
-	host_button.pressed.connect(_on_host_pressed)
-	box.add_child(host_button)
+	_host_label = LightTheme.label(tr("创建房间"), 42)
+	box.add_child(_host_label)
+	_host_button = LightTheme.button(tr("我是房主，建房"), 52)
+	_host_button.pressed.connect(_on_host_pressed)
+	box.add_child(_host_button)
 
-	box.add_child(LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 42))
-	var address_row := HBoxContainer.new()
-	address_row.add_theme_constant_override("separation", 10)
+	# 单机对电脑。有隐藏手牌的游戏（比如 UNO）只能这样单机玩，
+	# 同屏热座会让所有人看到彼此的手牌。
+	_solo_button = LightTheme.button(tr("单机试玩（对电脑）"), 52)
+	_solo_button.pressed.connect(_on_solo_pressed)
+	box.add_child(_solo_button)
+
+	_join_label = LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 42)
+	box.add_child(_join_label)
+	_address_row = HBoxContainer.new()
+	_address_row.add_theme_constant_override("separation", 10)
 	_ip = LineEdit.new()
 	_ip.placeholder_text = tr("192.168.1.5")
 	_ip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_ip.add_theme_font_size_override("font_size", 48)
 	_ip.custom_minimum_size = Vector2(0, 92)
-	address_row.add_child(_ip)
+	_address_row.add_child(_ip)
 	_port = LineEdit.new()
 	_port.text = str(Protocol.GAME_PORT)
 	_port.add_theme_font_size_override("font_size", 48)
 	_port.custom_minimum_size = Vector2(200, 92)
-	address_row.add_child(_port)
-	box.add_child(address_row)
+	_address_row.add_child(_port)
+	box.add_child(_address_row)
 
-	var join_button := LightTheme.button(tr("加入"), 52)
-	join_button.pressed.connect(_on_join_pressed)
-	box.add_child(join_button)
+	_join_button = LightTheme.button(tr("加入"), 52)
+	_join_button.pressed.connect(_on_join_pressed)
+	box.add_child(_join_button)
 
 	_menu_status = LightTheme.label("", 30)
 	_menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -286,6 +300,18 @@ func _show_menu(message := "") -> void:
 	_menu.visible = true
 	_menu_game.text = GamesCatalog.display_name(_selected_game)
 	_menu_status.text = message
+	# 按游戏自己声明的能力决定显示哪些入口——不靠判断游戏 id
+	var entry := _entry_for(_selected_game)
+	var online := bool(entry.get("online", true))
+	var solo := bool(entry.get("solo", false))
+	_host_label.visible = online
+	_host_button.visible = online
+	_join_label.visible = online
+	_address_row.visible = online
+	_join_button.visible = online
+	_solo_button.visible = solo
+	if not online and solo and message.is_empty():
+		_menu_status.text = tr("这款还没接联机，先在单机模式试玩")
 	LightTheme.present(_menu)
 
 
@@ -300,6 +326,24 @@ func _show_picker() -> void:
 	_menu.visible = false
 	_lobby.visible = false
 	LightTheme.present(_picker)
+
+
+func _entry_for(game_id: String) -> Dictionary:
+	for entry in GamesCatalog.entries():
+		if String(entry["id"]) == game_id:
+			return entry
+	return {}
+
+
+## 单机试玩：不进房间，直接开局对电脑。
+func _on_solo_pressed() -> void:
+	if not _open_game_screen(_selected_game):
+		return
+	if _game_screen.has_method("setup_solo"):
+		_game_screen.setup_solo(2)
+	else:
+		push_error("这个游戏没有单机入口：%s" % _selected_game)
+		_show_menu(tr("这款游戏还不支持单机试玩"))
 
 
 ## 装载对局界面。单机和联机用的是同一个场景：
