@@ -237,7 +237,12 @@ func _on_refused(reason: int) -> void:
 		Protocol.Refuse.VERSION_MISMATCH: text = tr("对方版本不一致，双方都得是最新版")
 		Protocol.Refuse.ROOM_FULL: text = tr("房间满了")
 		Protocol.Refuse.GAME_IN_PROGRESS: text = tr("对方已经开局了")
-		Transport.FailReason.TIMEOUT: text = tr("连不上：确认在同一个 Wi-Fi，或者让房主开热点")
+		Transport.FailReason.TIMEOUT: text = tr(
+			"连不上（超时）。\n\n" +
+			"1. 确认两台设备在同一个 Wi-Fi 或热点下\n" +
+			"2. 如果房主是模拟器：模拟器走的是 NAT 网络，外面的设备连不进去。\n" +
+			"   改让真机或电脑当房主，模拟器去加入\n" +
+			"3. 电脑当房主时留意 Windows 防火墙有没有放行")
 		Transport.FailReason.UNREACHABLE: text = tr("连不上：IP 地址可能填错了")
 	_on_connection_lost(text)
 

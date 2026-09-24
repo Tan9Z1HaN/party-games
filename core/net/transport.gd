@@ -29,11 +29,18 @@ signal server_disconnected()
 signal peer_joined(peer_id: int)
 signal peer_left(peer_id: int)
 
+## 连接层的失败原因。
+##
+## **取值从 100 起，不能和 Protocol.Refuse 撞号。**
+## 这两组码最终都会经过 UI 的同一个 match 分支，一旦编号重叠，
+## 排在前面那组会把后面的全部截胡——实际发生过：
+## TIMEOUT(1) 和 VERSION_MISMATCH(1) 撞了，于是「连接超时」被显示成
+## 「两端版本不一致」，把排查方向整个带偏。
 enum FailReason {
-	TIMEOUT = 1,      ## 超时未连上（局域网下最常见：客户端隔离、iOS 权限被拒）
-	REFUSED = 2,      ## 主机明确拒绝（版本不符 / 房间已满 / 游戏已开始）
-	UNREACHABLE = 3,  ## 地址不可达（不在同一网段、IP 填错）
-	UNKNOWN = 4,
+	TIMEOUT = 101,      ## 超时未连上（局域网下最常见：客户端隔离、iOS 权限被拒）
+	REFUSED = 102,      ## 主机明确拒绝（版本不符 / 房间已满 / 游戏已开始）
+	UNREACHABLE = 103,  ## 地址不可达（不在同一网段、IP 填错）
+	UNKNOWN = 104,
 }
 
 const RPC_PING := &"_transport_ping"
