@@ -12,7 +12,15 @@ const AUTHOR_NAME := "Tan9Z1HaN"
 const AVATAR_PATH := "res://头像.jpg"
 
 ## 开屏停留多久（不含淡入淡出）。点一下可以提前跳过。
-const SPLASH_SECONDS := 1.6
+const SPLASH_SECONDS := 1.2
+
+## 竖排时每个字占的方块，也是行距
+const TITLE_CHAR_BOX := 205.0
+const TITLE_CHAR_SIZE := 175
+## 收场时把竖排收成横排的缩放。四个字横过来比竖着宽得多，缩一点才不会顶出屏幕。
+const WORDMARK_SCALE := 0.72
+## 「聚」往左上平移多少。它先走到横排第一个字的位置，其余三个再跟着出现。
+const WORDMARK_SHIFT := Vector2(-70.0, -90.0)
 
 const SPLASH_BG := Color(0.97, 0.97, 0.97)
 const SPLASH_INK := Color(0.07, 0.07, 0.07)
@@ -31,6 +39,11 @@ var _menu: PanelContainer
 var _lobby: PanelContainer
 var _splash: PanelContainer
 var _splash_tween: Tween
+var _splash_divider: ColorRect
+var _splash_right: VBoxContainer
+## 开屏那四个字。**故意不放进容器里**：收场时要让每个字各走各的，
+## 容器会一直把它们按布局摆回去，动画根本推不动。
+var _title_chars: Array = []
 var _about: PanelContainer
 var _game_screen: Control = null
 
@@ -198,17 +211,26 @@ func _build_splash() -> void:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(row)
 
-	# 左：竖排的四个字
-	var title := VBoxContainer.new()
-	title.alignment = BoxContainer.ALIGNMENT_CENTER
-	title.add_theme_constant_override("separation", 0)
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 左：竖排的四个字。用一个固定尺寸的舞台手动摆位——
+	# 收场时要把它们排成横排，容器布局会一直跟动画打架。
+	var stage := Control.new()
+	stage.custom_minimum_size = Vector2(TITLE_CHAR_BOX,
+		TITLE_CHAR_BOX * float(SPLASH_TITLE.length()))
+	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(stage)
+
+	_title_chars.clear()
+	var line := 0
 	for character in SPLASH_TITLE:
-		var label := LightTheme.label(character, 175)
+		var label := LightTheme.label(character, TITLE_CHAR_SIZE)
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.size = Vector2(TITLE_CHAR_BOX, TITLE_CHAR_BOX)
+		label.position = Vector2(0.0, TITLE_CHAR_BOX * float(line))
 		label.add_theme_color_override("font_color", SPLASH_INK)
-		title.add_child(label)
-	row.add_child(title)
+		stage.add_child(label)
+		_title_chars.append(label)
+		line += 1
 
 	# 中：一条竖线。高度比四个字略短一点，两头留白
 	var divider := ColorRect.new()
@@ -217,6 +239,7 @@ func _build_splash() -> void:
 	divider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(divider)
+	_splash_divider = divider
 
 	# 右：头像框 + 署名
 	var right := VBoxContainer.new()
@@ -230,6 +253,7 @@ func _build_splash() -> void:
 	made_by.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	made_by.add_theme_color_override("font_color", SPLASH_INK)
 	right.add_child(made_by)
+	_splash_right = right
 
 
 ## 圆角黑框里的头像。框里的图被 shader 裁成圆角，
@@ -282,17 +306,95 @@ func _show_splash() -> void:
 	_picker.visible = false
 	_splash.visible = true
 	_splash.modulate.a = 0.0
+	_reset_splash()
 	_splash_tween = create_tween()
 	_splash_tween.tween_property(_splash, "modulate:a", 1.0, 0.3)
 	_splash_tween.tween_interval(SPLASH_SECONDS)
-	# 先让主界面开始淡入，再淡出开屏——两段动画时长一样、同时跑，
-	# 于是是交叉淡入淡出，而不是"先揭开一层膜"。
-	# 注意这里不能用 parallel()：parallel 是让下一个函数和**上一个**同时跑，
-	# 放在这里会让主界面在停留期间就出场（那时候还盖在开屏底下，看不出来，
-	# 但开屏淡出时就变回"揭膜"了）。
-	_splash_tween.tween_callback(_present_picker)
-	_splash_tween.tween_property(_splash, "modulate:a", 0.0, 0.32)
-	_splash_tween.tween_callback(dismiss_splash)
+	_splash_tween.tween_callback(_play_splash_outro)
+
+
+## 把开屏恢复成刚出场的样子。收场动画会改动字的位置、透明度，
+## 重放（测试会重放）之前得先摆回去。
+func _reset_splash() -> void:
+	for i in _title_chars.size():
+		var label: Control = _title_chars[i]
+		label.position = Vector2(0.0, TITLE_CHAR_BOX * float(i))
+		label.scale = Vector2.ONE
+		label.modulate.a = 1.0
+	if _splash_right != null:
+		_splash_right.modulate.a = 1.0
+	if _splash_divider != null:
+		_splash_divider.modulate.a = 1.0
+
+
+## 开屏的收场。顺序是设计稿定的：
+##   头像那块先消失 → 只剩「聚」→ 聚往左上平移 →
+##   「在一起」跟着出现，排成横排 → 停一拍，整屏淡出进主界面
+##
+## 每一步之后都看一眼开屏还在不在：中途被点掉（或者按了返回）就直接收工，
+## 别让已经藏起来的开屏继续动。
+func _play_splash_outro() -> void:
+	if _splash == null or not _splash.visible:
+		return
+
+	# 1. 图像先走：头像框和署名，连中间那条竖线一起——
+	#    竖线本来就是"左右两块"的分隔，右边没了它也没意义
+	var go_image := create_tween()
+	go_image.set_parallel(true)
+	go_image.tween_property(_splash_right, "modulate:a", 0.0, 0.28)
+	go_image.tween_property(_splash_divider, "modulate:a", 0.0, 0.28)
+	await go_image.finished
+	if not _splash.visible:
+		return
+
+	# 2. 「在一起」三个字淡出，只剩「聚」
+	var go_tail := create_tween()
+	go_tail.set_parallel(true)
+	for i in range(1, _title_chars.size()):
+		go_tail.tween_property(_title_chars[i], "modulate:a", 0.0, 0.2)
+	await go_tail.finished
+	if not _splash.visible:
+		return
+
+	# 3. 「聚」往左上平移，顺手缩到横排用的大小
+	var move := create_tween()
+	move.set_parallel(true)
+	move.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	move.tween_property(_title_chars[0], "position", WORDMARK_SHIFT, 0.42)
+	move.tween_property(_title_chars[0], "scale",
+		Vector2(WORDMARK_SCALE, WORDMARK_SCALE), 0.42)
+	await move.finished
+	if not _splash.visible:
+		return
+
+	# 4. 「在一起」在它右边逐个出现，像把名字写出来。
+	#    Label 的缩放原点是左上角，所以位置直接按缩放后的字宽算就行。
+	var step := TITLE_CHAR_BOX * WORDMARK_SCALE
+	var appear := create_tween()
+	appear.set_parallel(true)
+	for i in range(1, _title_chars.size()):
+		var label: Control = _title_chars[i]
+		label.position = WORDMARK_SHIFT + Vector2(step * float(i), 0.0)
+		label.scale = Vector2(WORDMARK_SCALE, WORDMARK_SCALE)
+		appear.tween_property(label, "modulate:a", 1.0, 0.26) \
+			.set_delay(0.08 * float(i - 1))
+	await appear.finished
+	if not _splash.visible:
+		return
+
+	var hold := create_tween()
+	hold.tween_interval(0.16)
+	await hold.finished
+	if not _splash.visible:
+		return
+
+	# 5. 整屏淡出，主界面同时淡入——交叉淡入，不是"揭开一层膜"
+	var out := create_tween()
+	out.set_parallel(true)
+	out.tween_property(_splash, "modulate:a", 0.0, 0.32)
+	out.tween_callback(_present_picker)
+	await out.finished
+	dismiss_splash(true)
 
 
 ## 主界面的出场：淡入 + 从 0.97 轻轻放大到 1。

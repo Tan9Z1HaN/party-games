@@ -35,6 +35,7 @@ func _run() -> void:
 
 	await _test_initial_screen()
 	await _test_back_skips_splash()
+	await _test_splash_outro()
 	await _test_about()
 	_test_back_from_menu()
 	await _test_back_from_lobby()
@@ -78,6 +79,52 @@ func _test_back_skips_splash() -> void:
 	_check("返回被吃掉了（没退到退出应用）", _main.go_back())
 	_check("开屏收起来了", not _main._splash.visible)
 	_check("还是停在第一屏", _main._picker.visible)
+
+
+## 开屏的收场编排：图片先走 → 只剩「聚」→ 聚往左上平移 →
+## 「在一起」排到它右边（竖排收成横排）。
+##
+## 动画本身没法逐帧断言，但**摆位**可以：编排拆了的话，最后这几个字
+## 会回到竖排原位，或者横排没对齐。
+func _test_splash_outro() -> void:
+	print("\n-- 开屏收场 --")
+	_main._show_splash()
+	if _main._splash_tween != null and _main._splash_tween.is_valid():
+		_main._splash_tween.kill()
+	_main._splash.modulate.a = 1.0
+	_main._reset_splash()
+	await process_frame
+
+	_main._play_splash_outro()
+	# 整段动画约 1.5 秒。等它自己把开屏收掉；超时就说明卡住了。
+	var until := Time.get_ticks_msec() + 4000
+	while _main._splash.visible and Time.get_ticks_msec() < until:
+		await process_frame
+
+	_check("收场跑完，开屏自己收掉了", not _main._splash.visible)
+	_check("主界面已经出场", _main._picker.visible)
+	_check("头像那块先淡掉了", _main._splash_right.modulate.a < 0.01,
+		"alpha=%f" % _main._splash_right.modulate.a)
+
+	var first: Control = _main._title_chars[0]
+	_check("「聚」离开了竖排原位",
+		first.position.distance_to(Vector2.ZERO) > 1.0, str(first.position))
+	_check("「聚」缩到横排用的大小", first.scale.x < 0.99, str(first.scale))
+
+	# 「在一起」应该排在「聚」右边、跟它同一条水平线
+	var step: float = _main.TITLE_CHAR_BOX * _main.WORDMARK_SCALE
+	var aligned := true
+	var detail := ""
+	for i in range(1, _main._title_chars.size()):
+		var label: Control = _main._title_chars[i]
+		var want: Vector2 = first.position + Vector2(step * float(i), 0.0)
+		if label.position.distance_to(want) > 1.0:
+			aligned = false
+			detail = "第 %d 个字在 %s，应该在 %s" % [i, label.position, want]
+		if absf(label.modulate.a - 1.0) > 0.01:
+			aligned = false
+			detail = "第 %d 个字没淡回来（alpha=%f）" % [i, label.modulate.a]
+	_check("「在一起」排到了右边、同一条水平线、也淡回来了", aligned, detail)
 
 
 ## 「关于作者」。名字和头像都从常量 / 那张图来，地址点一下开浏览器。
