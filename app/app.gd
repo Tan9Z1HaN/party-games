@@ -56,7 +56,61 @@ func _ready() -> void:
 	_build_menu()
 	_build_lobby()
 	_build_picker()
+	_install_back_handler()
 	_show_picker()
+
+
+# ---------------------------------------------------------------- 返回键
+
+## 把返回键接上。
+##
+## 引擎默认的行为是**直接退出应用**（application/config/quit_on_go_back），
+## 在手机上按一下返回键游戏就没了，非常容易误触。现在那一项关掉了，
+## 改成这里自己处理：沿界面栈往回走一层。
+##
+## 接的是 Window 自带的 go_back_requested 信号——它只在根 Window 上发，
+## 场景里的节点收不到，所以这里用 get_window() 而不是自己造一套。
+func _install_back_handler() -> void:
+	var window := get_window()
+	if window == null:
+		return
+	if not window.go_back_requested.is_connected(_on_back_requested):
+		window.go_back_requested.connect(_on_back_requested)
+
+
+func _on_back_requested() -> void:
+	if not go_back():
+		# 已经在第一屏了，再按一次才真的退出
+		get_tree().quit()
+
+
+## 往回退一层。返回 false 表示已经在最外层，没得退了。
+##
+## 界面栈：选游戏 → 菜单 → 大厅 → 对局。
+## 单机没有大厅那一步，对局按返回直接回菜单。
+func go_back() -> bool:
+	if _game_screen != null:
+		# 对局中返回 = 退出这一局。联机时连房间一起退，不然房主那边
+		# 会留着一个已经走人的玩家。
+		_on_game_exit_requested()
+		return true
+	if _lobby.visible:
+		_room.leave_room()
+		_show_menu(tr("已退出房间。再玩一局请重新建房或加入。"))
+		return true
+	if _menu.visible:
+		_show_picker()
+		return true
+	return false
+
+
+## 桌面上没有返回键，用 Esc（ui_cancel）走同一条路，
+## 方便对着返回逻辑调试，行为也跟手机一致。
+func _unhandled_input(event: InputEvent) -> void:
+	if not event.is_action_pressed("ui_cancel"):
+		return
+	get_viewport().set_input_as_handled()
+	_on_back_requested()
 
 
 ## 电脑上窗口默认是 540x960。屏幕（或笔记本的小屏）装不下这么高时，

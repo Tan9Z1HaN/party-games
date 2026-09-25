@@ -15,6 +15,7 @@ func _initialize() -> void:
 	print("=== 导出配置检查 ===")
 	_test_export_preset()
 	_test_boot_splash()
+	_test_back_button()
 	_test_word_file()
 	_test_build_scripts_ascii()
 	_finish()
@@ -88,6 +89,18 @@ func _test_boot_splash() -> void:
 		Color.BLACK)
 	_check("启动底色是浅色（不是默认的黑）",
 		bg.r > 0.6 and bg.g > 0.6 and bg.b > 0.6, str(bg))
+
+
+## Android 的返回键。默认行为是**按一下直接退出应用**，误触一下整个房间
+## 就没了——这是只有装到手机上才会发现的一类问题，所以在构建配置里钉死。
+##
+## 关掉自动退出之后，返回键走的是 Window 的 go_back_requested 信号，
+## 由 app.gd 沿界面栈往回走一层；那条链路的走法在 app_shell.gd 里测。
+func _test_back_button() -> void:
+	print("\n-- 返回键 --")
+	_check("关掉了「按返回直接退出应用」",
+		not bool(ProjectSettings.get_setting("application/config/quit_on_go_back", true)),
+		"application/config/quit_on_go_back")
 
 
 func _test_word_file() -> void:

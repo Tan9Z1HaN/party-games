@@ -14,9 +14,10 @@ config/name="PartyGames"
 config/description="局域网多人聚会游戏合集（你画我猜 / 画猜接龙 / UNO）"
 run/main_scene="res://app/main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
-config/icon="res://icon.svg"
-boot_splash/show_image=false
 boot_splash/bg_color=Color(0.83, 0.89, 1, 1)
+boot_splash/show_image=false
+config/icon="res://icon.svg"
+config/quit_on_go_back=false
 
 [display]
 
