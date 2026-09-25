@@ -75,6 +75,8 @@ func _capture(size: Vector2i, tag: String, screen: String, setup: Callable,
 	var main: Control = load("res://app/main.tscn").instantiate()
 	sub.add_child(main)
 	await _settle()
+	# 开屏会盖住所有界面，尺寸矩阵要拍的是底下的东西
+	main.dismiss_splash()
 	setup.call(main)
 	for i in frames:
 		await process_frame

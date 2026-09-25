@@ -5,10 +5,29 @@ extends Control
 ## Room 是本场景的子节点，路径固定为 /root/Main/Room ——
 ## 联网那条链路全靠它，改动节点树形状会让 RPC 静默失效。
 
+## 开屏页上竖排的四个字，以及右下角署名的名字。改这两行就能换。
+const SPLASH_TITLE := "聚在一起"
+const AUTHOR_NAME := "Tan9Z1HaN"
+## 头像。想换头像直接替换这张图就行，路径不用动。
+const AVATAR_PATH := "res://头像.jpg"
+
+## 开屏停留多久（不含淡入淡出）。点一下可以提前跳过。
+const SPLASH_SECONDS := 1.6
+
+const SPLASH_BG := Color(0.97, 0.97, 0.97)
+const SPLASH_INK := Color(0.07, 0.07, 0.07)
+## 头像框的边长和圆角。圆角数值要跟 ROUNDED_RADIUS 对得上，见那边说明。
+const AVATAR_FRAME := 360.0
+const AVATAR_RADIUS_PX := 62.0
+const AVATAR_BORDER := 5
+const ROUNDED_SHADER := preload("res://core/ui/rounded.gdshader")
+
 var _room: Room
 var _picker: PanelContainer
 var _menu: PanelContainer
 var _lobby: PanelContainer
+var _splash: PanelContainer
+var _splash_tween: Tween
 var _game_screen: Control = null
 
 var _menu_game: Label
@@ -56,8 +75,10 @@ func _ready() -> void:
 	_build_menu()
 	_build_lobby()
 	_build_picker()
+	_build_splash()
 	_install_back_handler()
 	_show_picker()
+	_show_splash()
 
 
 # ---------------------------------------------------------------- 返回键
@@ -89,6 +110,10 @@ func _on_back_requested() -> void:
 ## 界面栈：选游戏 → 菜单 → 大厅 → 对局。
 ## 单机没有大厅那一步，对局按返回直接回菜单。
 func go_back() -> bool:
+	if _splash != null and _splash.visible:
+		# 开屏还没走完就按返回：跳过它，而不是退出应用
+		dismiss_splash()
+		return true
 	if _game_screen != null:
 		# 对局中返回 = 退出这一局。联机时连房间一起退，不然房主那边
 		# 会留着一个已经走人的玩家。
@@ -137,6 +162,127 @@ func _fit_window_to_screen() -> void:
 
 
 # ---------------------------------------------------------------- 界面搭建
+
+## 开屏：左边竖排应用名，中间一条竖线，右边头像框加署名。
+## 版式照设计稿来——四个字是**竖着一个一个排**的，不是横排。
+##
+## 它盖在最上面，底下的「玩什么」照常先建好；淡出之后直接就是那一屏，
+## 中间不用切换场景。
+func _build_splash() -> void:
+	_splash = PanelContainer.new()
+	_splash.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var style := StyleBoxFlat.new()
+	style.bg_color = SPLASH_BG
+	_splash.add_theme_stylebox_override("panel", style)
+	add_child(_splash)
+	# 点一下直接进应用，不用干等
+	_splash.gui_input.connect(func(event: InputEvent):
+		if (event is InputEventMouseButton and event.pressed) \
+				or (event is InputEventScreenTouch and event.pressed):
+			dismiss_splash())
+
+	var center := CenterContainer.new()
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_splash.add_child(center)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 60)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(row)
+
+	# 左：竖排的四个字
+	var title := VBoxContainer.new()
+	title.alignment = BoxContainer.ALIGNMENT_CENTER
+	title.add_theme_constant_override("separation", 0)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for character in SPLASH_TITLE:
+		var label := LightTheme.label(character, 175)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.add_theme_color_override("font_color", SPLASH_INK)
+		title.add_child(label)
+	row.add_child(title)
+
+	# 中：一条竖线。高度比四个字略短一点，两头留白
+	var divider := ColorRect.new()
+	divider.color = SPLASH_INK
+	divider.custom_minimum_size = Vector2(5, 700)
+	divider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(divider)
+
+	# 右：头像框 + 署名
+	var right := VBoxContainer.new()
+	right.alignment = BoxContainer.ALIGNMENT_CENTER
+	right.add_theme_constant_override("separation", 40)
+	right.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(right)
+	right.add_child(_build_avatar_frame())
+
+	var made_by := LightTheme.label("Made by %s" % AUTHOR_NAME, 40)
+	made_by.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	made_by.add_theme_color_override("font_color", SPLASH_INK)
+	right.add_child(made_by)
+
+
+## 圆角黑框里的头像。框里的图被 shader 裁成圆角，
+## 不然直角图片的四角会从圆角边框里探出来。
+func _build_avatar_frame() -> Control:
+	var frame := PanelContainer.new()
+	frame.custom_minimum_size = Vector2(AVATAR_FRAME, AVATAR_FRAME)
+	frame.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var style := StyleBoxFlat.new()
+	style.bg_color = SPLASH_BG
+	style.set_corner_radius_all(int(AVATAR_RADIUS_PX))
+	style.border_color = SPLASH_INK
+	style.border_width_top = AVATAR_BORDER
+	style.border_width_bottom = AVATAR_BORDER
+	style.border_width_left = AVATAR_BORDER
+	style.border_width_right = AVATAR_BORDER
+	# 图片缩到边框里面，否则会被边框压掉一圈
+	for side in ["top", "bottom", "left", "right"]:
+		style.set("content_margin_" + side, float(AVATAR_BORDER))
+	frame.add_theme_stylebox_override("panel", style)
+
+	var avatar := TextureRect.new()
+	avatar.texture = load(AVATAR_PATH)
+	avatar.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	avatar.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var material := ShaderMaterial.new()
+	material.shader = ROUNDED_SHADER
+	# shader 里的半径单位是"半边长的比例"，所以要按框内实际边长换算
+	var inner := AVATAR_FRAME - AVATAR_BORDER * 2.0
+	var radius := AVATAR_RADIUS_PX - AVATAR_BORDER
+	material.set_shader_parameter("radius", radius / (inner * 0.5))
+	avatar.material = material
+	frame.add_child(avatar)
+	return frame
+
+
+## 开屏淡入，停一会儿，再淡出到「玩什么」。点一下可以提前跳过。
+func _show_splash() -> void:
+	if _splash == null:
+		return
+	_splash.visible = true
+	_splash.modulate.a = 0.0
+	_splash_tween = create_tween()
+	_splash_tween.tween_property(_splash, "modulate:a", 1.0, 0.3)
+	_splash_tween.tween_interval(SPLASH_SECONDS)
+	_splash_tween.tween_property(_splash, "modulate:a", 0.0, 0.3)
+	_splash_tween.tween_callback(dismiss_splash)
+
+
+## 收起开屏。测试和截图工具直接调它，免得每张图都等两秒。
+func dismiss_splash() -> void:
+	if _splash == null or not _splash.visible:
+		return
+	if _splash_tween != null and _splash_tween.is_valid():
+		_splash_tween.kill()
+	_splash_tween = null
+	_splash.visible = false
+
 
 ## 第一屏：玩什么。游戏是入口级别的选择，不藏在房间里——
 ## 你画我猜和 UNO 本来就是两个不同的游戏，混在一个房间配置里只会让人困惑。

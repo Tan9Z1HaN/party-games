@@ -19,6 +19,17 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	# 必须等一帧：_initialize 阶段场景树还没运转，add_child 不会触发 _ready，
+	# 那时候 _main 里的界面一个都还没建出来。
+	await process_frame
+	# 开屏是淡入的。直接把它摆到全不透明再截，别跟 tween 抢时间——
+	# 不然拍到的是半透明的一层，底下的界面会透出来。
+	if _main._splash_tween != null and _main._splash_tween.is_valid():
+		_main._splash_tween.kill()
+	_main._splash.modulate.a = 1.0
+	await _settle()
+	await _shot("app_00_splash")
+	_main.dismiss_splash()
 	await _settle()
 	await _shot("app_01_picker")
 

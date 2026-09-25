@@ -1,6 +1,6 @@
 extends SceneTree
 
-## 应用外壳（app/main.tscn）的界面栈与返回键测试。
+## 应用外壳（app/main.tscn）的开屏、界面栈与返回键测试。
 ##
 ##   godot --headless --path . --script res://tools/tests/app_shell.gd
 ##
@@ -33,7 +33,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 
-	_test_initial_screen()
+	await _test_initial_screen()
+	await _test_back_skips_splash()
 	_test_back_from_menu()
 	await _test_back_from_lobby()
 	await _test_back_from_game()
@@ -43,13 +44,38 @@ func _run() -> void:
 
 func _test_initial_screen() -> void:
 	print("\n-- 启动 --")
-	_check("启动停在「玩什么」那一屏", _main._picker.visible)
+	_check("启动先显示开屏", _main._splash.visible)
+	_check("开屏底下已经放好了「玩什么」",
+		_main._picker.visible)
 	_check("菜单和大厅都还没露出来",
 		not _main._menu.visible and not _main._lobby.visible)
 	# 返回键是 Window 级的信号，只在根窗口上发；接错地方就等于没接
 	_check("返回键的信号接到了",
 		_main.get_window().go_back_requested.is_connected(_main._on_back_requested))
 	_check("没有对局界面残留", _main._game_screen == null)
+
+	# 头像加载不上的话框里是空的，界面照样跑得起来——只有看图才发现
+	var avatar: Texture2D = load(_main.AVATAR_PATH)
+	_check("开屏的头像图片加载得上", avatar != null, _main.AVATAR_PATH)
+	if avatar != null:
+		_check("头像分辨率够用（不会糊）",
+			avatar.get_width() >= 256, "%dx%d" % [avatar.get_width(), avatar.get_height()])
+
+	_main.dismiss_splash()
+	await process_frame
+	_check("收起开屏之后就是「玩什么」",
+		not _main._splash.visible and _main._picker.visible)
+
+
+## 开屏还没走完就按返回，应该是跳过开屏，不是退出应用。
+func _test_back_skips_splash() -> void:
+	print("\n-- 开屏按返回：跳过 --")
+	_main._show_splash()
+	await process_frame
+	_check("开屏又亮起来了", _main._splash.visible)
+	_check("返回被吃掉了（没退到退出应用）", _main.go_back())
+	_check("开屏收起来了", not _main._splash.visible)
+	_check("还是停在第一屏", _main._picker.visible)
 
 
 func _test_back_from_menu() -> void:
