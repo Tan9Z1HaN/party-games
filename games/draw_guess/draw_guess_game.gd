@@ -100,7 +100,7 @@ func get_meta_info() -> Dictionary:
 	return {
 		"id": ID,
 		"name": tr("你画我猜"),
-		"min_players": 3,
+		"min_players": 2,
 		"max_players": 8,
 		"est_minutes": 6,
 		"scene": "res://games/draw_guess/main.tscn",

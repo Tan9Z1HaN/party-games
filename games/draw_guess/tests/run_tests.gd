@@ -26,6 +26,7 @@ func _initialize() -> void:
 	_test_drawer_leaves()
 	_test_missing_word_bank()
 	_test_drawer_rotation()
+	_test_two_players()
 	_test_client_snapshot()
 	_finish()
 
@@ -406,6 +407,39 @@ func _test_drawer_rotation() -> void:
 	duo.free()
 
 	game.free()
+
+
+## 两人局。下限从 3 改成 2 之后，这里钉住"两个人真的能玩完一回合"——
+## 大厅按 min_players 放人进来，规则这边要是其实玩不了，症状是
+## 开局即结束，而那种问题在编辑器里点不出来（得真的凑两个人）。
+func _test_two_players() -> void:
+	print("\n-- 两人局 --")
+	_check("声明的最少人数是 2",
+		int(DrawGuessGame.new().get_meta_info()["min_players"]) == 2)
+
+	var duo := DrawGuessGame.new()
+	duo.setup([
+		{"peer_id": 1, "name": "甲"},
+		{"peer_id": 2, "name": "乙"},
+	], {"rounds": 1, "round_seconds": 60, "difficulty": 1, "hints": true})
+	duo.start_round()
+	_check("两人也能开局，没有立刻结束",
+		duo.get_phase() == DrawGuessGame.Phase.CHOOSING, "%d" % duo.get_phase())
+
+	var drawer: int = duo.get_drawer_peer_id()
+	var guesser: int = 2 if drawer == 1 else 1
+	duo.on_player_input(drawer, DrawGuessMessages.encode_pick_word(0))
+	_check("选完词进入作画", duo.get_phase() == DrawGuessGame.Phase.DRAWING)
+
+	# 两个人时"猜词者"只有一个：他一猜对就该直接进结算
+	duo.on_player_input(guesser, DrawGuessMessages.encode_guess(duo.get_word_for(drawer)))
+	_check("唯一的猜词者猜对后本回合立刻收尾",
+		duo.get_phase() == DrawGuessGame.Phase.ROUND_END, "%d" % duo.get_phase())
+	_check("猜对的人拿到分", int(duo.get_scores().get(guesser, 0)) > 0,
+		str(duo.get_scores()))
+	_check("画手也拿到分", int(duo.get_scores().get(drawer, 0)) > 0,
+		str(duo.get_scores()))
+	duo.free()
 
 
 # ---------------------------------------------------------------- 客户端快照

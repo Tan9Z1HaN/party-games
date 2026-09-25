@@ -55,7 +55,10 @@ func _test_setup_screen() -> void:
 	_check("起始显示设置面板", _scene._setup_panel.visible)
 	_check("起始隐藏游戏区", not _scene._play_area.visible)
 	_check("难度有三档", _scene._difficulty_input.item_count == 3)
-	_check("人数从 3 起", _scene._player_count.item_count == 6, "%d" % _scene._player_count.item_count)
+	# 下限从 3 放到 2 之后，2 人也能开局（一个画一个猜）
+	_check("人数从 2 起", _scene._player_count.item_count == 7, "%d" % _scene._player_count.item_count)
+	_check("第一个档位是 2 人", _scene._player_count.get_item_id(0) == 2,
+		"%d" % _scene._player_count.get_item_id(0))
 	_check("回合数是下拉框", _scene._rounds_input is OptionButton)
 	_check("时长是下拉框", _scene._seconds_input is OptionButton)
 	_test_contrast()
@@ -91,7 +94,7 @@ func _test_contrast() -> void:
 
 func _test_start_game() -> void:
 	print("\n-- 开始游戏 --")
-	_scene._player_count.select(1)          # 4 人
+	_scene._player_count.select(2)          # 4 人（0 是 2 人，1 是 3 人）
 	_scene._rounds_input.select(0)          # 1 回合
 	_scene._seconds_input.select(1)         # 60 秒
 	_scene._start_game()

@@ -412,8 +412,10 @@ func _build_setup_panel() -> void:
 
 	box.add_child(_label(tr("玩家人数"), 26))
 	_player_count = OptionButton.new()
-	for n in range(3, PLAYER_LIMIT + 1):
+	# 从 2 人起：两个人也能玩（一个画一个猜），不用凑第三个人
+	for n in range(2, PLAYER_LIMIT + 1):
 		_player_count.add_item(tr("%d 人") % n, n)
+	# 默认还是 3 人——多一个人就多一份热闹，2 人是下限不是推荐值
 	_player_count.select(1)
 	box.add_child(_player_count)
 
