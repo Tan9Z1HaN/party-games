@@ -25,10 +25,12 @@ const TITLE_CHAR_SIZE := 175
 const WORDMARK_SCALE := 0.72
 ## 「聚」往左上平移多少。它先走到横排第一个字的位置，其余三个再跟着出现。
 const WORDMARK_SHIFT := Vector2(-70.0, -90.0)
-## 主界面左上角那行横排字的位置（相对菜单内容区）。
-## **开屏收场的落点就是它**：两张字完全重合，交接时看不出接缝，
-## 看起来就是"字从开屏挪到了主界面上"，而不是换了一张或者消失。
-const WORDMARK_HOME := Vector2(24.0, 16.0)
+## 主界面左上角那行横排字的位置，**绝对坐标**（跟菜单内容区的 44 边距无关）。
+##
+## 开屏收场的落点就是它。两边都从这个常量推，谁也不去读谁的运行时坐标——
+## 主界面在开屏期间是隐藏的，布局不保证已经算过，读出来会偏，
+## 表现就是"开屏那张字和主界面那张没对齐"。
+const WORDMARK_HOME := Vector2(68.0, 60.0)
 
 const SPLASH_BG := Color(0.97, 0.97, 0.97)
 const SPLASH_INK := Color(0.07, 0.07, 0.07)
@@ -56,6 +58,7 @@ var _splash_stage: Control
 var _title_chars: Array = []
 ## 主界面左上角那行横排的应用名。开屏收场就落在它身上。
 var _wordmark_chars: Array = []
+var _wordmark_stage: Control
 var _about: PanelContainer
 var _game_screen: Control = null
 
@@ -116,6 +119,10 @@ func _ready() -> void:
 ## 开屏的保险丝。正常走完是 3 秒出头；超过 SPLASH_MAX_SECONDS 还没收掉，
 ## 说明动画卡住了，直接收——绝不能让开屏挡住整个应用。
 func _process(_delta: float) -> void:
+	# 主界面那行横排字的显示跟着"选游戏"那一屏走。放在这里一处同步，
+	# 就不会因为漏改某个入口（菜单、大厅、对局）而残留在别的界面上。
+	if _wordmark_stage != null and _picker != null:
+		_wordmark_stage.visible = _picker.visible
 	if _splash == null or not _splash.visible:
 		return
 	if Time.get_ticks_msec() > _splash_deadline:
@@ -429,13 +436,18 @@ func _play_splash_outro() -> void:
 ## 开屏那四个字要落在主界面横排字的位置上，返回的是**开屏舞台坐标系**里的坐标。
 ##
 ## 两张字是一样的字号和缩放，所以只要左上角对齐，渲染出来就是完全重合的。
+##
+## **不读主界面节点的坐标**：那一屏在开屏期间是隐藏的，布局不保证已经算过，
+## 读出来会偏。两边都从 WORDMARK_HOME 这个常量推，才不会对不上。
 func _wordmark_landing() -> Array:
 	var out: Array = []
-	if _splash_stage == null or _wordmark_chars.is_empty():
+	if _splash_stage == null:
 		return out
 	var to_stage := _splash_stage.get_global_transform().affine_inverse()
-	for label in _wordmark_chars:
-		out.append(to_stage * (label as Control).global_position)
+	var to_app := get_global_transform()
+	var step := TITLE_CHAR_BOX * WORDMARK_SCALE
+	for i in SPLASH_TITLE.length():
+		out.append(to_stage * (to_app * (WORDMARK_HOME + Vector2(step * float(i), 0.0))))
 	return out
 
 
@@ -522,7 +534,11 @@ func _build_picker() -> void:
 func _build_wordmark() -> void:
 	var stage := Control.new()
 	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_picker.add_child(stage)
+	# 挂在应用根节点上而不是菜单面板里：菜单面板是容器，会把子节点的位置
+	# 按自己的内容区强制摆一遍，那样"绝对位置"就不作数了。
+	# 显示与否在 _process 里跟着选游戏那一屏同步。
+	add_child(stage)
+	_wordmark_stage = stage
 
 	_wordmark_chars.clear()
 	var step := TITLE_CHAR_BOX * WORDMARK_SCALE

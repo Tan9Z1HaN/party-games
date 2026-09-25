@@ -128,16 +128,21 @@ func _test_splash_outro() -> void:
 	# 是"交给"主界面的那行字，不是消失。对不齐的话交接时会出现重影或跳动。
 	_check("主界面上有一行横排的应用名", _main._wordmark_chars.size() == 4,
 		"%d 个字" % _main._wordmark_chars.size())
-	var landing: Array = _main._wordmark_landing()
+	# **用屏幕坐标比**，不是比两边各自的局部坐标：只比局部坐标的话，
+	# 两边都算错也会"看起来一致"。这里等主界面真的布完局再比。
+	await process_frame
+	await process_frame
 	var matched := true
 	var landing_detail := ""
 	for i in _main._title_chars.size():
-		var label: Control = _main._title_chars[i]
-		if i >= landing.size() or label.position.distance_to(landing[i]) > 1.0:
+		var splash_char: Control = _main._title_chars[i]
+		var home_char: Control = _main._wordmark_chars[i]
+		var gap: float = splash_char.global_position.distance_to(home_char.global_position)
+		if gap > 1.0:
 			matched = false
-			landing_detail = "第 %d 个字停在 %s，主界面那行在 %s" % [
-				i, label.position, landing[i] if i < landing.size() else "?"]
-	_check("开屏那四个字正好落在主界面横排字上（交接看不出接缝）",
+			landing_detail = "第 %d 个字：开屏在 %s，主界面在 %s（差 %.1f 像素）" % [
+				i, splash_char.global_position, home_char.global_position, gap]
+	_check("开屏那四个字和主界面横排字在屏幕上重合（交接看不出接缝）",
 		matched, landing_detail)
 
 	# 而且它得留在那儿：主界面可见的时候，那行字必须也可见
