@@ -124,14 +124,28 @@ func _test_splash_outro() -> void:
 			detail = "第 %d 个字在 %s，应该在 %s" % [i, label.position, want]
 	_check("「在一起」排到了右边、跟「聚」同一条水平线", aligned, detail)
 
-	# 收场结束时四个字必须全收干净：主界面是在开屏底下淡入的，
-	# 字要是还亮着，交叉淡入那几帧就会正压在刚出场的主界面上。
-	var still_visible := ""
+	# **落点必须跟主界面那行横排字完全重合**：开屏把竖排收成横排之后，
+	# 是"交给"主界面的那行字，不是消失。对不齐的话交接时会出现重影或跳动。
+	_check("主界面上有一行横排的应用名", _main._wordmark_chars.size() == 4,
+		"%d 个字" % _main._wordmark_chars.size())
+	var landing: Array = _main._wordmark_landing()
+	var matched := true
+	var landing_detail := ""
 	for i in _main._title_chars.size():
 		var label: Control = _main._title_chars[i]
-		if label.modulate.a > 0.01:
-			still_visible = "第 %d 个字 alpha=%f" % [i, label.modulate.a]
-	_check("字收干净了（不会留在主界面上）", still_visible.is_empty(), still_visible)
+		if i >= landing.size() or label.position.distance_to(landing[i]) > 1.0:
+			matched = false
+			landing_detail = "第 %d 个字停在 %s，主界面那行在 %s" % [
+				i, label.position, landing[i] if i < landing.size() else "?"]
+	_check("开屏那四个字正好落在主界面横排字上（交接看不出接缝）",
+		matched, landing_detail)
+
+	# 而且它得留在那儿：主界面可见的时候，那行字必须也可见
+	var wordmark_visible: bool = _main._picker.visible
+	for label in _main._wordmark_chars:
+		if not (label as Control).visible:
+			wordmark_visible = false
+	_check("横排字留在主界面上", wordmark_visible)
 
 
 ## 保险丝：开屏的收场是一步一步 await 的，任何一步卡住都会让它一直挡在屏幕上。

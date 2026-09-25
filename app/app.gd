@@ -25,6 +25,10 @@ const TITLE_CHAR_SIZE := 175
 const WORDMARK_SCALE := 0.72
 ## 「聚」往左上平移多少。它先走到横排第一个字的位置，其余三个再跟着出现。
 const WORDMARK_SHIFT := Vector2(-70.0, -90.0)
+## 主界面左上角那行横排字的位置（相对菜单内容区）。
+## **开屏收场的落点就是它**：两张字完全重合，交接时看不出接缝，
+## 看起来就是"字从开屏挪到了主界面上"，而不是换了一张或者消失。
+const WORDMARK_HOME := Vector2(24.0, 16.0)
 
 const SPLASH_BG := Color(0.97, 0.97, 0.97)
 const SPLASH_INK := Color(0.07, 0.07, 0.07)
@@ -46,9 +50,12 @@ var _splash_tween: Tween
 var _splash_divider: ColorRect
 var _splash_right: VBoxContainer
 var _splash_deadline := 0
+var _splash_stage: Control
 ## 开屏那四个字。**故意不放进容器里**：收场时要让每个字各走各的，
 ## 容器会一直把它们按布局摆回去，动画根本推不动。
 var _title_chars: Array = []
+## 主界面左上角那行横排的应用名。开屏收场就落在它身上。
+var _wordmark_chars: Array = []
 var _about: PanelContainer
 var _game_screen: Control = null
 
@@ -233,6 +240,7 @@ func _build_splash() -> void:
 		TITLE_CHAR_BOX * float(SPLASH_TITLE.length()))
 	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(stage)
+	_splash_stage = stage
 
 	_title_chars.clear()
 	var line := 0
@@ -372,25 +380,27 @@ func _play_splash_outro() -> void:
 	if not _splash.visible:
 		return
 
-	# 3. 「聚」往左上平移，顺手缩到横排用的大小
+	# 3. 「聚」往左上平移，落到主界面那行横排字第一个字的位置上
+	var landing := _wordmark_landing()
+	if landing.size() != _title_chars.size():
+		return
 	var move := create_tween()
 	move.set_parallel(true)
 	move.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	move.tween_property(_title_chars[0], "position", WORDMARK_SHIFT, 0.42)
+	move.tween_property(_title_chars[0], "position", landing[0], 0.42)
 	move.tween_property(_title_chars[0], "scale",
 		Vector2(WORDMARK_SCALE, WORDMARK_SCALE), 0.42)
 	await move.finished
 	if not _splash.visible:
 		return
 
-	# 4. 「在一起」在它右边逐个出现，像把名字写出来。
-	#    Label 的缩放原点是左上角，所以位置直接按缩放后的字宽算就行。
-	var step := TITLE_CHAR_BOX * WORDMARK_SCALE
+	# 4. 「在一起」在它右边逐个出现，像把名字写出来。落点同样对齐主界面那张。
+	#    Label 的缩放原点是左上角，位置直接给"目标左上角"就行。
 	var appear := create_tween()
 	appear.set_parallel(true)
 	for i in range(1, _title_chars.size()):
 		var label: Control = _title_chars[i]
-		label.position = WORDMARK_SHIFT + Vector2(step * float(i), 0.0)
+		label.position = landing[i]
 		label.scale = Vector2(WORDMARK_SCALE, WORDMARK_SCALE)
 		appear.tween_property(label, "modulate:a", 1.0, 0.26) \
 			.set_delay(0.08 * float(i - 1))
@@ -404,24 +414,40 @@ func _play_splash_outro() -> void:
 	if not _splash.visible:
 		return
 
-	# 5. 字先收掉。**这一步不能省**：主界面是在开屏底下淡入的，
-	#    字要是还亮着，交叉淡入那几帧「聚在一起」就正压在刚出场的主界面上，
-	#    看起来像是"最后留在了主界面"。
-	var clear := create_tween()
-	clear.set_parallel(true)
-	for label in _title_chars:
-		clear.tween_property(label, "modulate:a", 0.0, 0.22)
-	await clear.finished
-	if not _splash.visible:
-		return
-
-	# 6. 空白的开屏淡出，主界面同时淡入——交叉淡入，不是"揭开一层膜"
+	# 5. 交接。主界面那边**也有一行一模一样的字**，位置由 _wordmark_landing()
+	#    对齐过，所以两张在同一处交叉淡入淡出，看起来就是字留在了主界面上。
+	#    这里主界面只淡入、不缩放：缩放会让它那行字跟着缩，跟开屏这张错开，
+	#    交叉的那几帧就会出现重影。
 	var out := create_tween()
 	out.set_parallel(true)
 	out.tween_property(_splash, "modulate:a", 0.0, 0.26)
-	out.tween_callback(_present_picker)
+	out.tween_callback(_present_picker_from_splash)
 	await out.finished
 	dismiss_splash(true)
+
+
+## 开屏那四个字要落在主界面横排字的位置上，返回的是**开屏舞台坐标系**里的坐标。
+##
+## 两张字是一样的字号和缩放，所以只要左上角对齐，渲染出来就是完全重合的。
+func _wordmark_landing() -> Array:
+	var out: Array = []
+	if _splash_stage == null or _wordmark_chars.is_empty():
+		return out
+	var to_stage := _splash_stage.get_global_transform().affine_inverse()
+	for label in _wordmark_chars:
+		out.append(to_stage * (label as Control).global_position)
+	return out
+
+
+## 从开屏交接过来时，主界面只淡入，不做 LightTheme.present 那个缩放——
+## 缩放会把主界面那行横排字一起缩小，跟开屏那张错开位置，交叉时出现重影。
+func _present_picker_from_splash() -> void:
+	_picker.visible = true
+	_picker.pivot_offset = Vector2.ZERO
+	_picker.scale = Vector2.ONE
+	_picker.modulate.a = 0.0
+	var tween := create_tween()
+	tween.tween_property(_picker, "modulate:a", 1.0, 0.26)
 
 
 ## 主界面的出场：淡入 + 从 0.97 轻轻放大到 1。
@@ -485,6 +511,33 @@ func _build_picker() -> void:
 	box.add_child(about_row)
 
 	_picker.add_child(box)
+	_build_wordmark()
+
+
+## 主界面左上角那行横排的应用名。
+##
+## 它和开屏收场用的是同一套字（同字号、同缩放、同样的字距），
+## 位置由 WORDMARK_HOME 定死——所以开屏把那四个字挪过来之后，
+## 两者是**完全重合**的，交接看不出接缝。
+func _build_wordmark() -> void:
+	var stage := Control.new()
+	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_picker.add_child(stage)
+
+	_wordmark_chars.clear()
+	var step := TITLE_CHAR_BOX * WORDMARK_SCALE
+	var index := 0
+	for character in SPLASH_TITLE:
+		var label := LightTheme.label(character, TITLE_CHAR_SIZE)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.size = Vector2(TITLE_CHAR_BOX, TITLE_CHAR_BOX)
+		label.scale = Vector2(WORDMARK_SCALE, WORDMARK_SCALE)
+		label.position = WORDMARK_HOME + Vector2(step * float(index), 0.0)
+		label.add_theme_color_override("font_color", SPLASH_INK)
+		stage.add_child(label)
+		_wordmark_chars.append(label)
+		index += 1
 
 
 ## 占位用的弹性空档。VBoxContainer 里靠它把内容顶到两端。
