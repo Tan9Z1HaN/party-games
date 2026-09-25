@@ -145,12 +145,6 @@ func _build_menu() -> void:
 	_host_button.pressed.connect(_on_host_pressed)
 	box.add_child(_host_button)
 
-	# 单机对电脑。有隐藏手牌的游戏（比如 UNO）只能这样单机玩，
-	# 同屏热座会让所有人看到彼此的手牌。
-	_solo_button = LightTheme.button(tr("单机试玩（对电脑）"), 52)
-	_solo_button.pressed.connect(_on_solo_pressed)
-	box.add_child(_solo_button)
-
 	_join_label = LightTheme.label(tr("加入房间（填房主屏幕上的地址）"), 42)
 	box.add_child(_join_label)
 	_address_row = HBoxContainer.new()
@@ -171,6 +165,13 @@ func _build_menu() -> void:
 	_join_button = LightTheme.button(tr("加入"), 52)
 	_join_button.pressed.connect(_on_join_pressed)
 	box.add_child(_join_button)
+
+	# 单机对电脑。放在最后：联机才是这个 App 的主线，单机是没网时的退路。
+	# 有隐藏手牌的游戏（比如 UNO）只能这样单机玩，同屏热座会让所有人
+	# 看到彼此的手牌。
+	_solo_button = LightTheme.button(tr("单机试玩（对电脑）"), 52)
+	_solo_button.pressed.connect(_on_solo_pressed)
+	box.add_child(_solo_button)
 
 	_menu_status = LightTheme.label("", 30)
 	_menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

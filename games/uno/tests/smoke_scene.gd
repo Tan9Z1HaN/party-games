@@ -272,8 +272,9 @@ func _test_networked_wiring() -> void:
 		_scene._game != null and _scene._game._room == room)
 	_check("还没开局时状态是空的",
 		_scene._game != null and _scene._game.state().is_empty())
-	# 客户端点了也没用：重发只能由房主发起，不然两边的牌对不上
-	_check("客户端看不到重开一局的按钮", not _scene._again_button.visible)
+	# 联机时一律不给"重开一局"：这次是客户端，房主那边同样藏起来。
+	# （单机模式下它是亮的，上面每次 setup_solo 之后都在用。）
+	_check("联机时没有重开一局的按钮", not _scene._again_button.visible)
 	room.queue_free()
 
 

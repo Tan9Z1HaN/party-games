@@ -130,9 +130,10 @@ func setup_networked(room: Room, players: Array, config: Dictionary) -> void:
 	# 开局由房主发起。客户端等主机发来的第一份快照和手牌。
 	if room.is_host():
 		_game.start_round()
-	# 客户端点了也没用：重发只能由房主发起，不然两边的牌对不上
+	# 联机时干脆不给"重开一局"：打完各自回大厅重新开，比一条只在房主
+	# 那边生效的按钮清楚得多
 	if _again_button != null:
-		_again_button.visible = room.is_host()
+		_again_button.visible = false
 	await UnoCardArt.ensure_baked()
 	_layout()
 	_refresh()
@@ -167,13 +168,12 @@ func local_peer() -> int:
 	return _game.local_peer_id() if _game != null else SOLO_PEER
 
 
-## 重开一局。单机自己重发就行；联机只有房主能点——
-## 重发要保证所有人看到同一副牌，客户端自己重发只会跟主机对不上。
+## 重开一局。**只有单机有这条路**——联机时这个按钮是藏起来的：
+## 重发要所有人看到同一副牌，客户端自己重发会跟主机对不上；
+## 就算只让房主点，打完之后大家各自回到大厅重新开一局也更清楚，
+## 不会有人以为"还在原来那局里"。
 func _on_again() -> void:
-	if _room == null:
-		setup_solo(_solo_ai_count)
-	elif _room.is_host() and _game != null:
-		_game.start_round()
+	setup_solo(_solo_ai_count)
 
 
 ## 新一局：手牌节点全清掉重建，免得上一局的牌串进来。
