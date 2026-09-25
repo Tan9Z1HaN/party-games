@@ -31,6 +31,10 @@ const WORDMARK_SHIFT := Vector2(-70.0, -90.0)
 ## 主界面在开屏期间是隐藏的，布局不保证已经算过，读出来会偏，
 ## 表现就是"开屏那张字和主界面那张没对齐"。
 const WORDMARK_HOME := Vector2(68.0, 60.0)
+## 主界面那行字下面的英文副标题。跟着它一起出现。
+const TAGLINE := "Game For Share"
+const TAGLINE_SIZE := 44
+const TAGLINE_INK := Color(0.35, 0.36, 0.40)
 
 const SPLASH_BG := Color(0.97, 0.97, 0.97)
 const SPLASH_INK := Color(0.07, 0.07, 0.07)
@@ -59,6 +63,7 @@ var _title_chars: Array = []
 ## 主界面左上角那行横排的应用名。开屏收场就落在它身上。
 var _wordmark_chars: Array = []
 var _wordmark_stage: Control
+var _wordmark_tagline: Label
 var _about: PanelContainer
 var _game_screen: Control = null
 
@@ -554,6 +559,13 @@ func _build_wordmark() -> void:
 		stage.add_child(label)
 		_wordmark_chars.append(label)
 		index += 1
+
+	# 英文副标题：摆在横排字下面，跟主界面那一屏一起淡入——
+	# 开屏收场把「聚在一起」交过来的时候，它就是"跟着一起出现"的。
+	_wordmark_tagline = LightTheme.label(TAGLINE, TAGLINE_SIZE)
+	_wordmark_tagline.add_theme_color_override("font_color", TAGLINE_INK)
+	_wordmark_tagline.position = WORDMARK_HOME + Vector2(10.0, step + 8.0)
+	stage.add_child(_wordmark_tagline)
 
 
 ## 占位用的弹性空档。VBoxContainer 里靠它把内容顶到两端。

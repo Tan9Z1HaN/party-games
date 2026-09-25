@@ -152,6 +152,24 @@ func _test_splash_outro() -> void:
 			wordmark_visible = false
 	_check("横排字留在主界面上", wordmark_visible)
 
+	# 英文副标题：跟横排字挂在同一块上（一起显示一起藏），位置在它下面
+	var tagline: Label = _main._wordmark_tagline
+	_check("主界面上有一行英文副标题",
+		tagline != null and tagline.text == String(_main.TAGLINE),
+		"?" if tagline == null else tagline.text)
+	if tagline != null:
+		_check("副标题和横排字在同一块上（一起出现一起收）",
+			tagline.get_parent() == _main._wordmark_stage)
+		var box: float = _main.TITLE_CHAR_BOX * _main.WORDMARK_SCALE
+		var wordmark_bottom := 0.0
+		for label in _main._wordmark_chars:
+			wordmark_bottom = maxf(wordmark_bottom, (label as Control).position.y + box)
+		_check("副标题在横排字下面", tagline.position.y >= wordmark_bottom - 1.0,
+			"副标题在 %f，横排字底在 %f" % [tagline.position.y, wordmark_bottom])
+		_check("副标题比横排字小（是副标题不是第二个标题）",
+			_main.TAGLINE_SIZE < _main.TITLE_CHAR_SIZE,
+			"%d vs %d" % [_main.TAGLINE_SIZE, _main.TITLE_CHAR_SIZE])
+
 
 ## 保险丝：开屏的收场是一步一步 await 的，任何一步卡住都会让它一直挡在屏幕上。
 ## 那是「打不开应用」级别的故障，所以超时必须强制收掉。
