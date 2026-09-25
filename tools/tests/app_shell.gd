@@ -36,6 +36,7 @@ func _run() -> void:
 	await _test_initial_screen()
 	await _test_back_skips_splash()
 	await _test_splash_outro()
+	await _test_splash_watchdog()
 	await _test_about()
 	_test_back_from_menu()
 	await _test_back_from_lobby()
@@ -131,6 +132,23 @@ func _test_splash_outro() -> void:
 		if label.modulate.a > 0.01:
 			still_visible = "第 %d 个字 alpha=%f" % [i, label.modulate.a]
 	_check("字收干净了（不会留在主界面上）", still_visible.is_empty(), still_visible)
+
+
+## 保险丝：开屏的收场是一步一步 await 的，任何一步卡住都会让它一直挡在屏幕上。
+## 那是「打不开应用」级别的故障，所以超时必须强制收掉。
+func _test_splash_watchdog() -> void:
+	print("\n-- 开屏保险丝 --")
+	_main._show_splash()
+	await process_frame
+	_check("开屏亮着的时候有截止时间",
+		_main._splash_deadline > Time.get_ticks_msec())
+
+	# 把截止时间拨到过去，模拟动画卡住
+	_main._splash_deadline = Time.get_ticks_msec() - 1
+	await process_frame
+	await process_frame
+	_check("超时之后开屏被强制收掉", not _main._splash.visible)
+	_check("主界面接上了", _main._picker.visible)
 
 
 ## 「关于作者」。名字和头像都从常量 / 那张图来，地址点一下开浏览器。

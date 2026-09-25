@@ -13,6 +13,10 @@ const AVATAR_PATH := "res://头像.jpg"
 
 ## 开屏停留多久（不含淡入淡出）。点一下可以提前跳过。
 const SPLASH_SECONDS := 1.2
+## 开屏最多显示这么久。收场是一步一步 await 的，其中任何一步卡住
+## （掉帧、切后台、tween 被打断）都会让开屏一直挡在屏幕上——
+## 那是"打不开应用"级别的故障，所以压一道保险丝：超时直接收掉。
+const SPLASH_MAX_SECONDS := 6.0
 
 ## 竖排时每个字占的方块，也是行距
 const TITLE_CHAR_BOX := 205.0
@@ -41,6 +45,7 @@ var _splash: PanelContainer
 var _splash_tween: Tween
 var _splash_divider: ColorRect
 var _splash_right: VBoxContainer
+var _splash_deadline := 0
 ## 开屏那四个字。**故意不放进容器里**：收场时要让每个字各走各的，
 ## 容器会一直把它们按布局摆回去，动画根本推不动。
 var _title_chars: Array = []
@@ -100,6 +105,16 @@ func _ready() -> void:
 
 
 # ---------------------------------------------------------------- 返回键
+
+## 开屏的保险丝。正常走完是 3 秒出头；超过 SPLASH_MAX_SECONDS 还没收掉，
+## 说明动画卡住了，直接收——绝不能让开屏挡住整个应用。
+func _process(_delta: float) -> void:
+	if _splash == null or not _splash.visible:
+		return
+	if Time.get_ticks_msec() > _splash_deadline:
+		push_warning("开屏超时，强制收起")
+		dismiss_splash(true)
+
 
 ## 把返回键接上。
 ##
@@ -306,6 +321,7 @@ func _show_splash() -> void:
 	_picker.visible = false
 	_splash.visible = true
 	_splash.modulate.a = 0.0
+	_splash_deadline = Time.get_ticks_msec() + int(SPLASH_MAX_SECONDS * 1000.0)
 	_reset_splash()
 	_splash_tween = create_tween()
 	_splash_tween.tween_property(_splash, "modulate:a", 1.0, 0.3)
