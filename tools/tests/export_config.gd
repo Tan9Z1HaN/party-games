@@ -14,6 +14,7 @@ var _failed := 0
 func _initialize() -> void:
 	print("=== 导出配置检查 ===")
 	_test_export_preset()
+	_test_icon()
 	_test_boot_splash()
 	_test_back_button()
 	_test_word_file()
@@ -71,6 +72,41 @@ func _test_export_preset() -> void:
 		break
 
 	_check("存在 Android 预设", found)
+
+
+## 应用图标。Godot 用 ThorVG 光栅化 SVG，而它**不支持 <text> 元素**——
+## 图标里写了文字的话会静默渲染成一片空白，而且在编辑器里看不出来，
+## 只有装到手机上盯着桌面图标才发现。所以这里连"渲染出来到底有没有东西"
+## 一起验：既是防 SVG 里混进不支持的写法，也是防图标被换成空白图。
+##
+##   tools/gen_icon.ps1 负责生成这个图标（字形轮廓，不依赖运行时字体）
+func _test_icon() -> void:
+	print("\n-- 应用图标 --")
+	var texture: Texture2D = load("res://icon.svg")
+	_check("图标能加载", texture != null)
+	if texture == null:
+		return
+
+	var image := texture.get_image()
+	_check("图标有尺寸", image != null and image.get_width() >= 64,
+		"%dx%d" % [image.get_width(), image.get_height()])
+	if image == null:
+		return
+
+	var opaque := 0
+	var dark := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			var c := image.get_pixel(x, y)
+			if c.a > 0.5:
+				opaque += 1
+				if c.r < 0.4 and c.g < 0.4 and c.b < 0.4:
+					dark += 1
+	var total := image.get_width() * image.get_height()
+	_check("底色画出来了（不是全透明）", opaque * 2 > total,
+		"%d/%d 不透明" % [opaque, total])
+	_check("字画出来了（有深色像素）", dark * 20 > total,
+		"%d 个深色像素，占 %.1f%%" % [dark, 100.0 * dark / total])
 
 
 ## 启动画面。项目里没配的话用的是 Godot 默认那张引擎 logo，

@@ -7,7 +7,8 @@ extends SceneTree
 ##   godot --path . --script res://tools/screenshot.gd --resolution 720x1280
 ##
 ## 截图落在 user:// 下，Windows 上是
-##   %APPDATA%\Godot\app_userdata\PartyGames\
+##   %APPDATA%\Godot\app_userdata\聚在一起\
+## （这个目录名跟着 project.godot 的 config/name 走，改应用名它就跟着变。）
 ##
 ## 存在的意义：像「浅色文字压在浅色面板上读不出来」这种问题，
 ## 单测和冒烟测试全都是绿的，只有真的看一眼才发现得了。

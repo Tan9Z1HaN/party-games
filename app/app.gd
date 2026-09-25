@@ -149,6 +149,9 @@ func _build_picker() -> void:
 	var box := VBoxContainer.new()
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 24)
+	# 应用名。就放这一处：启动应用时总得知道自己在用什么，
+	# 而它同时也是手机上桌面图标下面的名字。
+	box.add_child(LightTheme.label(tr("聚在一起"), 56))
 	box.add_child(LightTheme.label(tr("玩什么"), 96))
 
 	for entry in GamesCatalog.entries():
