@@ -37,6 +37,16 @@ func _run() -> void:
 	await _shot_after(0.22, "splash_2_only_ju")
 	await _shot_after(0.42, "splash_3_ju_moved")
 	await _shot_after(0.55, "splash_4_wordmark")
+	# 交接那一刻：主界面正在淡入。这一张里**不该再看到「聚在一起」**——
+	# 字要是在，就等于压在了刚出场的主界面上。
+	await _shot_after(0.5, "splash_5_handoff")
+	# 收场跑完之后再看一张：这一张必须是干干净净的主界面，
+	# 顶上还留着字就说明开屏没收干净。
+	var until := Time.get_ticks_msec() + 3000
+	while _main._splash.visible and Time.get_ticks_msec() < until:
+		await process_frame
+	await _wait_msec(450)
+	await _shot("splash_6_main")
 	print("开屏分镜完成")
 	quit(0)
 
@@ -54,6 +64,12 @@ func _shot_after(seconds: float, label: String) -> void:
 func _settle() -> void:
 	await process_frame
 	await RenderingServer.frame_post_draw
+
+
+func _wait_msec(ms: int) -> void:
+	var until := Time.get_ticks_msec() + ms
+	while Time.get_ticks_msec() < until:
+		await process_frame
 
 
 func _shot(label: String) -> void:

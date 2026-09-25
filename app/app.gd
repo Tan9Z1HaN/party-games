@@ -383,15 +383,26 @@ func _play_splash_outro() -> void:
 		return
 
 	var hold := create_tween()
-	hold.tween_interval(0.16)
+	hold.tween_interval(0.12)
 	await hold.finished
 	if not _splash.visible:
 		return
 
-	# 5. 整屏淡出，主界面同时淡入——交叉淡入，不是"揭开一层膜"
+	# 5. 字先收掉。**这一步不能省**：主界面是在开屏底下淡入的，
+	#    字要是还亮着，交叉淡入那几帧「聚在一起」就正压在刚出场的主界面上，
+	#    看起来像是"最后留在了主界面"。
+	var clear := create_tween()
+	clear.set_parallel(true)
+	for label in _title_chars:
+		clear.tween_property(label, "modulate:a", 0.0, 0.22)
+	await clear.finished
+	if not _splash.visible:
+		return
+
+	# 6. 空白的开屏淡出，主界面同时淡入——交叉淡入，不是"揭开一层膜"
 	var out := create_tween()
 	out.set_parallel(true)
-	out.tween_property(_splash, "modulate:a", 0.0, 0.32)
+	out.tween_property(_splash, "modulate:a", 0.0, 0.26)
 	out.tween_callback(_present_picker)
 	await out.finished
 	dismiss_splash(true)

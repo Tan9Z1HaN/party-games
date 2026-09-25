@@ -121,10 +121,16 @@ func _test_splash_outro() -> void:
 		if label.position.distance_to(want) > 1.0:
 			aligned = false
 			detail = "第 %d 个字在 %s，应该在 %s" % [i, label.position, want]
-		if absf(label.modulate.a - 1.0) > 0.01:
-			aligned = false
-			detail = "第 %d 个字没淡回来（alpha=%f）" % [i, label.modulate.a]
-	_check("「在一起」排到了右边、同一条水平线、也淡回来了", aligned, detail)
+	_check("「在一起」排到了右边、跟「聚」同一条水平线", aligned, detail)
+
+	# 收场结束时四个字必须全收干净：主界面是在开屏底下淡入的，
+	# 字要是还亮着，交叉淡入那几帧就会正压在刚出场的主界面上。
+	var still_visible := ""
+	for i in _main._title_chars.size():
+		var label: Control = _main._title_chars[i]
+		if label.modulate.a > 0.01:
+			still_visible = "第 %d 个字 alpha=%f" % [i, label.modulate.a]
+	_check("字收干净了（不会留在主界面上）", still_visible.is_empty(), still_visible)
 
 
 ## 「关于作者」。名字和头像都从常量 / 那张图来，地址点一下开浏览器。
