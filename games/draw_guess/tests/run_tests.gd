@@ -106,6 +106,17 @@ func _test_synonyms() -> void:
 	_check("差太远不提示", not bank.is_close(bike, "飞机", 1))
 	_check("长度差太多不提示", not bank.is_close(bike, "车", 1))
 
+	# 单机、或者房主自己当画手时，答案是"本机发给本机"的。
+	# 那条路径曾经把 _entry 覆盖成只有 word/category/difficulty 的字典，
+	# 于是 matches() 去读 entry["synonyms"] 抛错——表现是"同义词猜对了也不算"，
+	# 而且只在上面这两种情况下复现，联网对战里反倒看不出来。
+	var game := DrawGuessGame.new()
+	game._entry = bike
+	game._apply_set_word("自行车", "交通", 1)
+	_check("本机发答案不会冲掉词库那条记录", game._entry.has("synonyms"))
+	_check("同义词照样能匹配", bank.matches(game._entry, "单车"))
+	game.free()
+
 
 # ---------------------------------------------------------------- 报文
 

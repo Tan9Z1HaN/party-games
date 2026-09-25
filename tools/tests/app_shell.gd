@@ -35,6 +35,7 @@ func _run() -> void:
 
 	await _test_initial_screen()
 	await _test_back_skips_splash()
+	await _test_about()
 	_test_back_from_menu()
 	await _test_back_from_lobby()
 	await _test_back_from_game()
@@ -45,8 +46,9 @@ func _run() -> void:
 func _test_initial_screen() -> void:
 	print("\n-- 启动 --")
 	_check("启动先显示开屏", _main._splash.visible)
-	_check("开屏底下已经放好了「玩什么」",
-		_main._picker.visible)
+	# 主界面先藏着，等开屏快走完再淡入——直接晾在底下的话，
+	# 开屏淡出只是"揭开一层膜"，看着像贴图
+	_check("开屏时主界面还没出场", not _main._picker.visible)
 	_check("菜单和大厅都还没露出来",
 		not _main._menu.visible and not _main._lobby.visible)
 	# 返回键是 Window 级的信号，只在根窗口上发；接错地方就等于没接
@@ -76,6 +78,23 @@ func _test_back_skips_splash() -> void:
 	_check("返回被吃掉了（没退到退出应用）", _main.go_back())
 	_check("开屏收起来了", not _main._splash.visible)
 	_check("还是停在第一屏", _main._picker.visible)
+
+
+## 「关于作者」。名字和头像都从常量 / 那张图来，地址点一下开浏览器。
+func _test_about() -> void:
+	print("\n-- 关于作者 --")
+	_check("默认不显示", not _main._about.visible)
+	_check("作者名有值", not String(_main.AUTHOR_NAME).is_empty(), _main.AUTHOR_NAME)
+	_check("GitHub 地址是 https 的",
+		String(_main.AUTHOR_URL).begins_with("https://"), _main.AUTHOR_URL)
+
+	_main._show_about()
+	await process_frame
+	_check("点开了", _main._about.visible)
+	# 返回键要先关掉它，而不是把这一屏也退掉
+	_check("返回键先关掉关于作者", _main.go_back())
+	_check("关掉了", not _main._about.visible)
+	_check("还停在第一屏", _main._picker.visible)
 
 
 func _test_back_from_menu() -> void:

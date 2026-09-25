@@ -22,12 +22,16 @@ const AVATAR_RADIUS_PX := 62.0
 const AVATAR_BORDER := 5
 const ROUNDED_SHADER := preload("res://core/ui/rounded.gdshader")
 
+## 关于作者页里的 GitHub 地址。点一下会用系统浏览器打开。
+const AUTHOR_URL := "https://github.com/Tan9Z1HaN"
+
 var _room: Room
 var _picker: PanelContainer
 var _menu: PanelContainer
 var _lobby: PanelContainer
 var _splash: PanelContainer
 var _splash_tween: Tween
+var _about: PanelContainer
 var _game_screen: Control = null
 
 var _menu_game: Label
@@ -75,6 +79,7 @@ func _ready() -> void:
 	_build_menu()
 	_build_lobby()
 	_build_picker()
+	_build_about()
 	_build_splash()
 	_install_back_handler()
 	_show_picker()
@@ -112,7 +117,10 @@ func _on_back_requested() -> void:
 func go_back() -> bool:
 	if _splash != null and _splash.visible:
 		# 开屏还没走完就按返回：跳过它，而不是退出应用
-		dismiss_splash()
+		dismiss_splash(true)
+		return true
+	if _about != null and _about.visible:
+		_hide_about()
 		return true
 	if _game_screen != null:
 		# 对局中返回 = 退出这一局。联机时连房间一起退，不然房主那边
@@ -226,23 +234,26 @@ func _build_splash() -> void:
 
 ## 圆角黑框里的头像。框里的图被 shader 裁成圆角，
 ## 不然直角图片的四角会从圆角边框里探出来。
-func _build_avatar_frame() -> Control:
+##
+## 尺寸和圆角都带默认值：开屏用大的，关于作者页用小的，同一份代码。
+func _build_avatar_frame(size := AVATAR_FRAME, radius_px := AVATAR_RADIUS_PX,
+		border := AVATAR_BORDER) -> Control:
 	var frame := PanelContainer.new()
-	frame.custom_minimum_size = Vector2(AVATAR_FRAME, AVATAR_FRAME)
+	frame.custom_minimum_size = Vector2(size, size)
 	frame.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var style := StyleBoxFlat.new()
 	style.bg_color = SPLASH_BG
-	style.set_corner_radius_all(int(AVATAR_RADIUS_PX))
+	style.set_corner_radius_all(int(radius_px))
 	style.border_color = SPLASH_INK
-	style.border_width_top = AVATAR_BORDER
-	style.border_width_bottom = AVATAR_BORDER
-	style.border_width_left = AVATAR_BORDER
-	style.border_width_right = AVATAR_BORDER
+	style.border_width_top = border
+	style.border_width_bottom = border
+	style.border_width_left = border
+	style.border_width_right = border
 	# 图片缩到边框里面，否则会被边框压掉一圈
 	for side in ["top", "bottom", "left", "right"]:
-		style.set("content_margin_" + side, float(AVATAR_BORDER))
+		style.set("content_margin_" + side, float(border))
 	frame.add_theme_stylebox_override("panel", style)
 
 	var avatar := TextureRect.new()
@@ -253,8 +264,8 @@ func _build_avatar_frame() -> Control:
 	var material := ShaderMaterial.new()
 	material.shader = ROUNDED_SHADER
 	# shader 里的半径单位是"半边长的比例"，所以要按框内实际边长换算
-	var inner := AVATAR_FRAME - AVATAR_BORDER * 2.0
-	var radius := AVATAR_RADIUS_PX - AVATAR_BORDER
+	var inner := size - border * 2.0
+	var radius := radius_px - border
 	material.set_shader_parameter("radius", radius / (inner * 0.5))
 	avatar.material = material
 	frame.add_child(avatar)
@@ -265,23 +276,48 @@ func _build_avatar_frame() -> Control:
 func _show_splash() -> void:
 	if _splash == null:
 		return
+	# 主界面先藏起来，等开屏快走完再让它淡入。
+	# 直接把它晾在开屏底下的话，开屏淡出只是"揭开一层膜"——
+	# 底下那屏纹丝不动地等在那儿，看着像贴图；让它自己出场才像衔接。
+	_picker.visible = false
 	_splash.visible = true
 	_splash.modulate.a = 0.0
 	_splash_tween = create_tween()
 	_splash_tween.tween_property(_splash, "modulate:a", 1.0, 0.3)
 	_splash_tween.tween_interval(SPLASH_SECONDS)
-	_splash_tween.tween_property(_splash, "modulate:a", 0.0, 0.3)
+	# 先让主界面开始淡入，再淡出开屏——两段动画时长一样、同时跑，
+	# 于是是交叉淡入淡出，而不是"先揭开一层膜"。
+	# 注意这里不能用 parallel()：parallel 是让下一个函数和**上一个**同时跑，
+	# 放在这里会让主界面在停留期间就出场（那时候还盖在开屏底下，看不出来，
+	# 但开屏淡出时就变回"揭膜"了）。
+	_splash_tween.tween_callback(_present_picker)
+	_splash_tween.tween_property(_splash, "modulate:a", 0.0, 0.32)
 	_splash_tween.tween_callback(dismiss_splash)
 
 
+## 主界面的出场：淡入 + 从 0.97 轻轻放大到 1。
+func _present_picker() -> void:
+	_picker.visible = true
+	LightTheme.present(_picker, 0.32)
+
+
 ## 收起开屏。测试和截图工具直接调它，免得每张图都等两秒。
-func dismiss_splash() -> void:
+##
+## instant 为 true 时主界面直接就位，不走淡入——截图工具要的是稳定的画面，
+## 不该跟动画抢时间。
+func dismiss_splash(instant := false) -> void:
 	if _splash == null or not _splash.visible:
 		return
 	if _splash_tween != null and _splash_tween.is_valid():
 		_splash_tween.kill()
 	_splash_tween = null
 	_splash.visible = false
+	if instant:
+		_picker.visible = true
+		_picker.modulate.a = 1.0
+		_picker.scale = Vector2.ONE
+	else:
+		_present_picker()
 
 
 ## 第一屏：玩什么。游戏是入口级别的选择，不藏在房间里——
@@ -293,12 +329,10 @@ func _build_picker() -> void:
 	add_child(_picker)
 
 	var box := VBoxContainer.new()
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 24)
-	# 应用名。就放这一处：启动应用时总得知道自己在用什么，
-	# 而它同时也是手机上桌面图标下面的名字。
-	box.add_child(LightTheme.label(tr("聚在一起"), 56))
-	box.add_child(LightTheme.label(tr("玩什么"), 96))
+	# 名字由开屏负责，这一屏只放选择，不再重复标题。
+	# 上下各留一个弹性空档：游戏列表大致居中，「关于作者」落到最下面。
+	box.add_child(_spacer())
 
 	for entry in GamesCatalog.entries():
 		var id := String(entry["id"])
@@ -309,7 +343,103 @@ func _build_picker() -> void:
 		button.pressed.connect(func(): _on_game_selected(id))
 		box.add_child(button)
 
+	box.add_child(_spacer())
+
+	# 小一号的次要入口，贴在最下面，别跟游戏选择抢注意力
+	var about_row := HBoxContainer.new()
+	about_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	var about := LightTheme.button(tr("关于作者"), 28)
+	about.custom_minimum_size = Vector2(240, 72)
+	about.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	about.pressed.connect(_show_about)
+	about_row.add_child(about)
+	box.add_child(about_row)
+
 	_picker.add_child(box)
+
+
+## 占位用的弹性空档。VBoxContainer 里靠它把内容顶到两端。
+func _spacer() -> Control:
+	var node := Control.new()
+	node.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return node
+
+
+## 关于作者。头像、名字、GitHub 地址，地址做成按钮可以直接点开。
+##
+## 铺满整屏的半透明底：点空白处就能关掉，不用非去找关闭按钮。
+func _build_about() -> void:
+	_about = PanelContainer.new()
+	_about.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var backdrop := StyleBoxFlat.new()
+	backdrop.bg_color = Color(0.1, 0.1, 0.15, 0.45)
+	_about.add_theme_stylebox_override("panel", backdrop)
+	_about.visible = false
+	add_child(_about)
+	_about.gui_input.connect(func(event: InputEvent):
+		if (event is InputEventMouseButton and event.pressed) \
+				or (event is InputEventScreenTouch and event.pressed):
+			_hide_about())
+
+	var center := CenterContainer.new()
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_about.add_child(center)
+
+	var card := PanelContainer.new()
+	# 这里必须是不透明的卡片：LightTheme.panel_style() 是半透明的玻璃面板，
+	# 当对话框用的话底下的游戏按钮会透上来
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color(1, 1, 1)
+	card_style.set_corner_radius_all(28)
+	card_style.border_width_top = 2
+	card_style.border_width_bottom = 2
+	card_style.border_width_left = 2
+	card_style.border_width_right = 2
+	card_style.border_color = LightTheme.GLASS_BORDER
+	card_style.shadow_color = LightTheme.GLASS_SHADOW
+	card_style.shadow_size = 12
+	card_style.shadow_offset = Vector2(0, 4)
+	card_style.content_margin_left = 48.0
+	card_style.content_margin_right = 48.0
+	card_style.content_margin_top = 40.0
+	card_style.content_margin_bottom = 40.0
+	card.add_theme_stylebox_override("panel", card_style)
+	# 卡片自己要吃掉点击，否则点卡片也会被当成"点空白"关掉
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	center.add_child(card)
+
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 28)
+	card.add_child(box)
+
+	var title := LightTheme.label(tr("关于作者"), 44)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	box.add_child(_build_avatar_frame(240.0, 42.0, 4))
+	var who := LightTheme.label(AUTHOR_NAME, 52)
+	who.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(who)
+
+	var link := LightTheme.button(AUTHOR_URL, 34)
+	link.pressed.connect(func(): OS.shell_open(AUTHOR_URL))
+	box.add_child(link)
+
+	var close := LightTheme.button(tr("关闭"), 34)
+	close.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	close.custom_minimum_size = Vector2(240, 72)
+	close.pressed.connect(_hide_about)
+	box.add_child(close)
+
+
+func _show_about() -> void:
+	_about.visible = true
+	LightTheme.present(_about, 0.18)
+
+
+func _hide_about() -> void:
+	_about.visible = false
 
 
 func _on_game_selected(id: String) -> void:

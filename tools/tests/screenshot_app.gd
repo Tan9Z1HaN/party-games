@@ -29,9 +29,18 @@ func _run() -> void:
 	_main._splash.modulate.a = 1.0
 	await _settle()
 	await _shot("app_00_splash")
-	_main.dismiss_splash()
+	_main.dismiss_splash(true)
 	await _settle()
 	await _shot("app_01_picker")
+	# 关于作者是淡入的，等它显出来再截。
+	# 按真实时间等，不按帧数——这个工具不锁帧，跑起来一帧只有几毫秒，
+	# 按帧等等到的是半透明的中间状态。
+	_main._show_about()
+	await _wait_msec(400)
+	await _settle()
+	await _shot("app_01b_about")
+	_main._hide_about()
+	await _settle()
 
 	_main._on_game_selected("uno")
 	await _settle()
@@ -55,6 +64,14 @@ func _settle() -> void:
 	await process_frame
 	await process_frame
 	await RenderingServer.frame_post_draw
+
+
+## 按墙钟时间等。用帧数在这类工具里不可靠：不锁帧时一帧几毫秒，
+## "等 20 帧"可能只有 0.05 秒，动画根本没走完。
+func _wait_msec(ms: int) -> void:
+	var until := Time.get_ticks_msec() + ms
+	while Time.get_ticks_msec() < until:
+		await process_frame
 
 
 func _shot(label: String) -> void:

@@ -616,7 +616,17 @@ func _deliver_word() -> void:
 
 func _apply_set_word(word: String, category: String, difficulty: int) -> void:
 	_private_word = word
-	_entry = {"word": word, "category": category, "difficulty": difficulty}
+	# **别把 _entry 冲掉**：权威端的 _entry 是词库里那条完整记录（带 synonyms），
+	# 而这里的 word/category/difficulty 是报文里来的、字段不全。
+	# 覆盖之后 matches() 会去读 entry["synonyms"]，直接抛错——
+	# 表现是"同义词猜对了也不算"，而且只在单机或房主当画手时才复现。
+	if not _is_authority() or _entry.is_empty():
+		_entry = {
+			"word": word,
+			"category": category,
+			"difficulty": difficulty,
+			"synonyms": PackedStringArray(),
+		}
 	word_selected.emit(word, category, difficulty)
 
 
