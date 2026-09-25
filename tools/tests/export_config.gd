@@ -69,6 +69,18 @@ func _test_export_preset() -> void:
 		_check("安卓导出关掉了 Godot 启动图",
 			bool(config.get_value(options, "splash_screen/disable_godot_boot_splash", false)),
 			"关掉它，手机启动时才不会先闪引擎 logo")
+
+		# 光有关掉引擎启动图还不够：安卓 12 起系统自己也要放一张启动画面。
+		# 把它的图标换成全透明那张，启动时才是干干净净一片底色。
+		_check("导出的自适应图标指向了我们生成的那两层",
+			String(config.get_value(options,
+				"launcher_icons/adaptive_foreground_432x432", "")).contains(
+				"android_icon_foreground"),
+			"不指过去的话，启动器会拿普通图标去裁形状，四个字就会缺角")
+		_check("导出的启动画面图标是全透明那张",
+			String(config.get_value(options, "splash_screen/icon", "")).contains(
+				"android_splash_blank"),
+			"留空的话系统会拿应用图标当启动画面")
 		break
 
 	_check("存在 Android 预设", found)
@@ -107,6 +119,50 @@ func _test_icon() -> void:
 		"%d/%d 不透明" % [opaque, total])
 	_check("字画出来了（有深色像素）", dark * 20 > total,
 		"%d 个深色像素，占 %.1f%%" % [dark, 100.0 * dark / total])
+
+	# 自适应图标的两层。尺寸写死成 432x432 是安卓的规定，不对的话导出会失败。
+	for pair in [["res://android_icon_foreground.png", "前景"],
+			["res://android_icon_background.png", "背景"]]:
+		var tex: Texture2D = load(String(pair[0]))
+		_check("%s层能加载" % pair[1], tex != null, String(pair[0]))
+		if tex == null:
+			continue
+		_check("%s层是 432x432" % pair[1],
+			tex.get_width() == 432 and tex.get_height() == 432,
+			"%dx%d" % [tex.get_width(), tex.get_height()])
+
+	# **这条是「四个字被裁掉」那个问题的回归测试**：安卓只保证自适应图标的
+	# 中间那圈可见（各家启动器再按自己的形状裁），所以内容必须落在
+	# 以中心为圆心、直径 2/3 的圆里。有像素探出这个圆，换台手机就会缺角。
+	var fg: Texture2D = load("res://android_icon_foreground.png")
+	if fg != null:
+		var fimg := fg.get_image()
+		var safe := fimg.get_width() / 3.0
+		var center := Vector2(fimg.get_width(), fimg.get_height()) * 0.5
+		var farthest := 0.0
+		for y in fimg.get_height():
+			for x in fimg.get_width():
+				if fimg.get_pixel(x, y).a <= 0.25:
+					continue
+				farthest = maxf(farthest, Vector2(x, y).distance_to(center))
+		_check("前景层的内容都在安全区里（换任何形状的启动器都不缺角）",
+			farthest <= safe,
+			"最远的像素离中心 %.1f，安全半径 %.1f" % [farthest, safe])
+
+	# 启动画面那张必须全透明：这就是「启动时不显示图标」的全部保证
+	var blank: Texture2D = load("res://android_splash_blank.png")
+	_check("启动画面图标能加载", blank != null)
+	if blank != null:
+		var bimg := blank.get_image()
+		var any_visible := false
+		for y in bimg.get_height():
+			for x in bimg.get_width():
+				if bimg.get_pixel(x, y).a > 0.01:
+					any_visible = true
+					break
+			if any_visible:
+				break
+		_check("启动画面图标是全透明的（启动时看不到它）", not any_visible)
 
 
 ## 启动画面。项目里没配的话用的是 Godot 默认那张引擎 logo，

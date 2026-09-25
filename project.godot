@@ -13,11 +13,11 @@ config_version=5
 config/name="聚在一起"
 config/description="局域网多人聚会游戏合集（你画我猜 / 画猜接龙 / UNO）"
 run/main_scene="res://app/main.tscn"
+config/quit_on_go_back=false
 config/features=PackedStringArray("4.7", "Mobile")
 boot_splash/bg_color=Color(0.83, 0.89, 1, 1)
 boot_splash/show_image=false
 config/icon="res://icon.svg"
-config/quit_on_go_back=false
 
 [display]
 
