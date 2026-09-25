@@ -641,6 +641,20 @@ func _build_about() -> void:
 	close.custom_minimum_size = Vector2(240, 72)
 	close.pressed.connect(_hide_about)
 	box.add_child(close)
+	# 版本号：装在手机上之后，一眼就能确认装的是不是刚导出的那一版
+	var version_label := LightTheme.label(tr("版本 %s") % app_version(), 28)
+	version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(version_label)
+
+
+## 应用版本号。**只写在 project.godot 的 application/config/version 一处**，
+## 这里读出来显示而已。
+##
+## 安卓安装包上那个版本号是导出预设里的 version/name / version/code，
+## 两者必须一致——否则手机上显示的版本和实际装的包是两回事。
+## 这条有测试盯着（tools/tests/export_config.gd）。
+func app_version() -> String:
+	return String(ProjectSettings.get_setting("application/config/version", "未标注"))
 
 
 func _show_about() -> void:

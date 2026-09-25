@@ -81,6 +81,21 @@ func _test_export_preset() -> void:
 			String(config.get_value(options, "splash_screen/icon", "")).contains(
 				"android_splash_blank"),
 			"留空的话系统会拿应用图标当启动画面")
+
+		# 版本号有两份：应用里显示的是 project.godot 的 application/config/version，
+		# 安装包上写的是预设里的 version/name。对不上的话，手机上显示的版本
+		# 和实际装的包是两回事——测了半天发现装的是旧包，很难查。
+		_check("安卓预设的版本号和项目里的一致",
+			String(config.get_value(options, "version/name", ""))
+				== String(ProjectSettings.get_setting("application/config/version", "")),
+			"预设 %s vs 项目 %s" % [
+				config.get_value(options, "version/name", ""),
+				ProjectSettings.get_setting("application/config/version", "")])
+		# versionCode 是给系统看的整数，每次发新版都要 +1：
+		# 不涨的话安卓会认为"同一版"，覆盖安装可能不生效，应用商店也会拒收。
+		_check("versionCode 是正整数",
+			int(config.get_value(options, "version/code", 0)) >= 1,
+			"%d" % int(config.get_value(options, "version/code", 0)))
 		break
 
 	_check("存在 Android 预设", found)

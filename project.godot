@@ -18,6 +18,7 @@ config/features=PackedStringArray("4.7", "Mobile")
 boot_splash/bg_color=Color(0.83, 0.89, 1, 1)
 boot_splash/show_image=false
 config/icon="res://icon.svg"
+config/version="V1.0"
 
 [display]
 

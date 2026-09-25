@@ -199,6 +199,9 @@ func _test_about() -> void:
 	_main._show_about()
 	await process_frame
 	_check("点开了", _main._about.visible)
+	_check("关于作者里写着版本号",
+		not _main.app_version().is_empty() and _main.app_version() != "未标注",
+		_main.app_version())
 	# 返回键要先关掉它，而不是把这一屏也退掉
 	_check("返回键先关掉关于作者", _main.go_back())
 	_check("关掉了", not _main._about.visible)
