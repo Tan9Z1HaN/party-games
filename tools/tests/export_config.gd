@@ -14,6 +14,7 @@ var _failed := 0
 func _initialize() -> void:
 	print("=== 导出配置检查 ===")
 	_test_export_preset()
+	_test_boot_splash()
 	_test_word_file()
 	_test_build_scripts_ascii()
 	_finish()
@@ -60,9 +61,33 @@ func _test_export_preset() -> void:
 			"权限为 false 时，安卓上建房/加入都会失败")
 		_check("开了网络状态权限",
 			bool(config.get_value(options, "permissions/access_network_state", false)))
+
+		# 启动时不该先闪一下 Godot 的引擎 logo。装到手机上尤其明显：
+		# 先是引擎 logo，再是应用自己的浅色底，中间那一下很出戏。
+		_check("安卓导出关掉了 Godot 启动图",
+			bool(config.get_value(options, "splash_screen/disable_godot_boot_splash", false)),
+			"关掉它，手机启动时才不会先闪引擎 logo")
 		break
 
 	_check("存在 Android 预设", found)
+
+
+## 启动画面。项目里没配的话用的是 Godot 默认那张引擎 logo，
+## 而应用的底是浅蓝紫——中间那一下非常突兀。
+##
+## 这里的断言是防回退：Godot 编辑器改 project.godot 时会整段重写，
+## 手改的配置很容易被它悄悄抹掉。
+func _test_boot_splash() -> void:
+	print("\n-- 启动画面 --")
+	_check("关掉了启动图（不显示 Godot logo）",
+		not bool(ProjectSettings.get_setting("application/boot_splash/show_image", true)),
+		"application/boot_splash/show_image")
+
+	# 底色跟 app 里 LightTheme 的渐变起点一致，加载完接上去看不出接缝
+	var bg: Color = ProjectSettings.get_setting("application/boot_splash/bg_color",
+		Color.BLACK)
+	_check("启动底色是浅色（不是默认的黑）",
+		bg.r > 0.6 and bg.g > 0.6 and bg.b > 0.6, str(bg))
 
 
 func _test_word_file() -> void:
