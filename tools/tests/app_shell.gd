@@ -58,6 +58,14 @@ func _test_initial_screen() -> void:
 		_main.get_window().go_back_requested.is_connected(_main._on_back_requested))
 	_check("没有对局界面残留", _main._game_screen == null)
 
+	# 手机上每点一次按钮，按钮都会拿到焦点。focus 样式要是画了边框，
+	# 就会看到"每个按钮外面都有个蓝框"而且一直留着——那是给键盘导航用的。
+	var theme: Theme = _main.theme
+	for tname in ["Button", "OptionButton", "LineEdit"]:
+		var box: StyleBox = theme.get_stylebox("focus", tname)
+		_check("%s 的焦点框是空的（点完不留蓝边）" % tname,
+			box is StyleBoxEmpty, box.get_class())
+
 	# 头像加载不上的话框里是空的，界面照样跑得起来——只有看图才发现
 	var avatar: Texture2D = load(_main.AVATAR_PATH)
 	_check("开屏的头像图片加载得上", avatar != null, _main.AVATAR_PATH)

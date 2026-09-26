@@ -84,15 +84,17 @@ static func surface_box(color: Color) -> StyleBoxFlat:
 	return box
 
 
-## 键盘焦点圈：背景全透明只画边，免得盖住正常状态的底色。
-static func focus_box() -> StyleBoxFlat:
-	var box := surface_box(Color(1, 1, 1, 0.0))
-	box.border_width_top = 3
-	box.border_width_bottom = 3
-	box.border_width_left = 3
-	box.border_width_right = 3
-	box.border_color = FOCUS_RING
-	return box
+## 焦点样式。
+##
+## **这里必须是空的**：手机上每次点按钮，按钮都会拿到焦点，如果 focus 画了
+## 一圈边框，就会看到"每个按钮外面都有个蓝框"，而且它一直留在那儿——
+## 那是给键盘/手柄导航用的提示，触摸界面上纯属干扰。
+##
+## 代价是键盘和手柄导航时看不出焦点在哪。这个项目是手机聚会游戏，
+## 不接受触摸屏的操作都走不到，所以这个代价可以接受；
+## 哪天真要接手柄，再把边框加回来（或者按输入设备切换主题）。
+static func focus_box() -> StyleBox:
+	return StyleBoxEmpty.new()
 
 
 ## 覆盖整屏的面板（菜单、大厅、结算这类）。带内边距，
