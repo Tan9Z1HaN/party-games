@@ -51,8 +51,18 @@ func _test_export_preset() -> void:
 		_check("include_filter 含 *.txt", filter.contains("*.txt"), "当前值：\"%s\"" % filter)
 
 		var options := section + ".options"
-		_check("含 x86_64 架构（模拟器要用）",
-			bool(config.get_value(options, "architectures/x86_64", false)))
+		# arm64 是真机（也就是最终用户）要用的，不能关
+		_check("含 arm64-v8a 架构（真机要用）",
+			bool(config.get_value(options, "architectures/arm64-v8a", false)))
+		# x86_64 是给安卓模拟器用的。现在只出 arm64（包更小），
+		# 靠模拟器的 ARM 转译也能装——MuMu 就是这么装上的。
+		# 哪天模拟器装不上了，先把这里勾回来。
+		var any_arch := false
+		for arch in ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]:
+			if bool(config.get_value(options, "architectures/" + arch, false)):
+				any_arch = true
+		_check("至少开了一个架构", any_arch,
+			"一个都不开的话导出的包装不上任何设备")
 		_check("含 arm64-v8a 架构（真机要用）",
 			bool(config.get_value(options, "architectures/arm64-v8a", false)))
 

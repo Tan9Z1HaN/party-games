@@ -508,9 +508,9 @@ func _build_picker() -> void:
 
 	for entry in GamesCatalog.entries():
 		var id := String(entry["id"])
-		var button := LightTheme.button("%s　（%d~%d 人 · 约 %d 分钟）" % [
-			entry["name"], int(entry["min_players"]),
-			int(entry["max_players"]), int(entry["est_minutes"])], 44)
+		# 按钮上只写游戏名。人数和时间那串对"选哪个游戏"没有帮助，
+		# 反而把名字挤小了；人数下限的实际作用在大厅（不够人开不了局）。
+		var button := LightTheme.button(String(entry["name"]), 52)
 		button.custom_minimum_size = Vector2(0, 130)
 		button.pressed.connect(func(): _on_game_selected(id))
 		box.add_child(button)
