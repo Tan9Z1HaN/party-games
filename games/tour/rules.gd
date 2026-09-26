@@ -21,10 +21,10 @@ enum Phase {
 	FINISHED,
 }
 
-enum Decision { NONE, BUY, UPGRADE }
+enum Decision { NONE, BUY, UPGRADE, TAX }
 
 ## 动作的结果，界面和 AI 用它决定下一步
-enum Action { ROLL, BUY, UPGRADE, PASS, PAY_FINE }
+enum Action { ROLL, BUY, UPGRADE, PASS, PAY_FINE, TAX_FLAT, TAX_PERCENT }
 
 ## 起始资金。破产制之下这就是"一根引线有多长"：给多了谁都破不了产。
 ##
@@ -281,6 +281,8 @@ func snapshot() -> Dictionary:
 		"phase": _phase,
 		"decision": _decision,
 		"pending_cell": _pending_cell,
+		# 等玩家选税怎么交时，把两个选项的金额一起给出去，界面直接用
+		"tax": tax_options(current_player()) if _decision == Decision.TAX else {},
 		"round": round_index(),
 		"max_rounds": _max_rounds,
 		"alive": alive_count(),
@@ -387,12 +389,68 @@ func pay_fine(peer_id: int) -> Dictionary:
 	return {"ok": true}
 
 
+## 落在所得税上时的两个选项：交固定值，还是交总资产的一个比例。
+##
+## 返回 {flat, percent, by_percent, cheaper}。by_percent 按**总资产**
+## （现金 + 地产成本）算，跟经典的「总资产 10%」一致。
+func tax_options(peer_id: int, cell := -1) -> Dictionary:
+	var target := _pending_cell if cell < 0 else cell
+	var flat := TourBoard.amount_of(target)
+	var percent := TourBoard.percent_of(target)
+	var by_percent := 0
+	if percent > 0:
+		by_percent = maxi(1, roundi(float(assets_of(peer_id)) * float(percent) / 100.0))
+	return {
+		"flat": flat,
+		"percent": percent,
+		"by_percent": by_percent,
+		"cheaper": "percent" if by_percent < flat else "flat",
+	}
+
+
+## 交固定值（所得税的选项之一）
+func pay_tax_flat(peer_id: int) -> Dictionary:
+	var guard := _guard_decision(peer_id, Decision.TAX)
+	if not guard.is_empty():
+		return guard
+	var options := tax_options(peer_id)
+	var amount := int(options["flat"])
+	_note("%s 交了所得税 %d" % [_name_of(peer_id), amount])
+	_pay(peer_id, amount)
+	_end_turn()
+	return {"ok": true, "amount": amount}
+
+
+## 按总资产的比例交（所得税的另一个选项）
+func pay_tax_percent(peer_id: int) -> Dictionary:
+	var guard := _guard_decision(peer_id, Decision.TAX)
+	if not guard.is_empty():
+		return guard
+	var options := tax_options(peer_id)
+	var amount := int(options["by_percent"])
+	_note("%s 按总资产的 %d%% 交了所得税 %d" % [
+		_name_of(peer_id), int(options["percent"]), amount])
+	_pay(peer_id, amount)
+	_end_turn()
+	return {"ok": true, "amount": amount}
+
+
 ## 按当前局面推荐一个动作。界面（超时兜底）和 AI 都用它。
 func suggested_action(peer_id: int) -> Action:
 	if peer_id != current_player():
 		return Action.PASS
 	if _phase == Phase.DECIDING:
-		return Action.BUY if _decision == Decision.BUY else Action.UPGRADE
+		match _decision:
+			Decision.BUY:
+				return Action.BUY
+			Decision.UPGRADE:
+				return Action.UPGRADE
+			Decision.TAX:
+				# 哪个便宜交哪个
+				var options := tax_options(peer_id)
+				return Action.TAX_PERCENT if String(options["cheaper"]) == "percent" \
+					else Action.TAX_FLAT
+		return Action.PASS
 	if skip_of(peer_id) > 0 and cash_of(peer_id) >= JAIL_FINE * 3:
 		return Action.PAY_FINE
 	return Action.ROLL
@@ -431,10 +489,16 @@ func _settle(peer_id: int, chain := 0) -> void:
 		TourBoard.Kind.CITY, TourBoard.Kind.STATION, TourBoard.Kind.UTILITY:
 			_settle_property(peer_id, cell)
 		TourBoard.Kind.TAX:
-			var amount := TourBoard.amount_of(cell)
-			_note("%s 交了 %s %d" % [
-				_name_of(peer_id), TourBoard.name_of(cell), amount])
-			_pay(peer_id, amount)
+			# 所得税给两个选项（交固定值 / 交总资产的比例），奢侈税只有固定值
+			if TourBoard.has_tax_choice(cell):
+				_decision = Decision.TAX
+				_pending_cell = cell
+				_phase = Phase.DECIDING
+			else:
+				var amount := TourBoard.amount_of(cell)
+				_note("%s 交了 %s %d" % [
+					_name_of(peer_id), TourBoard.name_of(cell), amount])
+				_pay(peer_id, amount)
 		TourBoard.Kind.CHANCE:
 			_draw_card(peer_id, true, chain)
 		TourBoard.Kind.FATE:

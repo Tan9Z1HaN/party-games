@@ -301,25 +301,73 @@ func _test_upgrade() -> void:
 # ---------------------------------------------------------------- 税与破产
 
 func _test_tax_and_knockout() -> void:
-	print("\n-- 税与出局 --")
+	print("\n-- 所得税二选一 --")
 	var rules := _new_game()
-	rules._pos[1] = 4          # 个人所得税 −200
+	rules._pos[1] = 4          # 个人所得税
 	rules._cursor = 0
-	var cash := rules.cash_of(1)
 	rules._settle(1)
-	_check("交了税", rules.cash_of(1) == cash - 200, "%d" % rules.cash_of(1))
-	_check("没有出局", not rules.is_out(1))
+	_check("所得税会停下来问怎么交",
+		rules.phase() == TourRules.Phase.DECIDING
+			and rules.decision() == TourRules.Decision.TAX,
+		"%d / %d" % [rules.phase(), rules.decision()])
 
-	# 现金不够付税 → 出局，名下的地释放
-	rules._owner[14] = 1
-	rules._level[14] = 1
-	rules._cash[1] = 100
-	rules._pos[1] = 4
-	rules._settle(1)
-	_check("付不出来就出局", rules.is_out(1))
-	_check("出局后现金清零", rules.cash_of(1) == 0)
-	_check("名下的地释放了（别人可以买）", rules.owner_of(14) == 0)
-	_check("日志写出了局", "出局" in rules.last_note(), rules.last_note())
+	var options := rules.tax_options(1)
+	_check("固定值是 200", int(options["flat"]) == 200, str(options))
+	# 起始 600、没有地 → 总资产 600，10% 是 60
+	_check("按总资产 10% 算出来是 60", int(options["by_percent"]) == 60, str(options))
+	_check("开局无地时按比例更划算", String(options["cheaper"]) == "percent")
+
+	var cash := rules.cash_of(1)
+	rules.pay_tax_flat(1)
+	_check("选固定值扣 200", rules.cash_of(1) == cash - 200, "%d" % rules.cash_of(1))
+	_check("交完就交棒", rules.current_player() == 2)
+
+	# 换成按比例交
+	var by_pct := _new_game()
+	by_pct._pos[1] = 4
+	by_pct._cursor = 0
+	by_pct._settle(1)
+	var before := by_pct.cash_of(1)
+	by_pct.pay_tax_percent(1)
+	_check("选按比例扣 60", by_pct.cash_of(1) == before - 60,
+		"%d" % by_pct.cash_of(1))
+
+	# 现金多的时候反过来：10% 比 200 贵，这时候该选固定值
+	var rich := _new_game()
+	rich._cash[1] = 3000
+	rich._pos[1] = 4
+	rich._cursor = 0
+	rich._settle(1)
+	var rich_options := rich.tax_options(1)
+	_check("现金多时按比例更贵",
+		int(rich_options["by_percent"]) > int(rich_options["flat"]), str(rich_options))
+	_check("这时候固定值更划算", String(rich_options["cheaper"]) == "flat")
+	_check("AI 会挑便宜的那个",
+		TourAi.choose(rich, 1) == TourRules.Action.TAX_FLAT,
+		"%d" % TourAi.choose(rich, 1))
+
+	# 奢侈税没有二选一，落上直接扣
+	var luxury := _new_game()
+	luxury._pos[1] = 38
+	luxury._cursor = 0
+	var cash2 := luxury.cash_of(1)
+	luxury._settle(1)
+	_check("奢侈税不给选项", luxury.phase() != TourRules.Phase.DECIDING)
+	_check("奢侈税直接扣 100", luxury.cash_of(1) == cash2 - 100,
+		"%d" % luxury.cash_of(1))
+
+	# 付不出来就出局，名下的地释放
+	var broke := _new_game()
+	broke._owner[14] = 1
+	broke._level[14] = 1
+	broke._cash[1] = 50
+	broke._pos[1] = 38
+	broke._cursor = 0
+	broke._settle(1)
+	_check("付不出税就出局", broke.is_out(1))
+	_check("出局后现金清零", broke.cash_of(1) == 0)
+	_check("名下的地释放了（别人可以买）", broke.owner_of(14) == 0)
+	_check("日志写出了局", "出局" in broke.last_note(), broke.last_note())
 
 
 # ---------------------------------------------------------------- 卡片

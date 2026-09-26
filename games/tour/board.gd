@@ -53,7 +53,8 @@ const JAIL_CELL := 10
 const SIDE := 10
 
 ## 每一格：name 全名（日志和弹窗用）/ kind 类别 / group 组号（-1 不属于任何组）
-## / price 地价 / amount 税额 / short 格子上的短名（只有全名超过 4 个字时才写）
+## / price 地价 / amount 税额 / percent 可选的按资产比例（0 表示没得选）
+## / short 格子上的短名（只有全名超过 4 个字时才写）
 ##
 ## **格子上只放短名**：一格在 1080 宽的竖屏上只有 98 像素，四个字已经是极限，
 ## 五个字就读不出来了。全名留给弹窗和日志。
@@ -62,7 +63,11 @@ const CELLS := [
 	{"name": "三亚", "kind": Kind.CITY, "group": 0, "price": 60, "amount": 0},
 	{"name": "命运", "kind": Kind.FATE, "group": -1, "price": 0, "amount": 0},
 	{"name": "海口", "kind": Kind.CITY, "group": 0, "price": 80, "amount": 0},
-	{"name": "个人所得税", "short": "所得税", "kind": Kind.TAX, "group": -1, "price": 0, "amount": 200},
+	# 经典玩法：所得税可以「交固定 200」或「交总资产的 10%」，玩家自己挑。
+	# 前期现金少交固定值划算，后期地多现金少就交比例——这条二选一正好
+	# 把前后期都照顾到，也给玩家一个真正的决策点。
+	{"name": "个人所得税", "short": "所得税", "kind": Kind.TAX, "group": -1,
+		"price": 0, "amount": 200, "percent": 10},
 	{"name": "北京南站", "kind": Kind.STATION, "group": -1, "price": 200, "amount": 0},
 	{"name": "桂林", "kind": Kind.CITY, "group": 1, "price": 100, "amount": 0},
 	{"name": "机会", "kind": Kind.CHANCE, "group": -1, "price": 0, "amount": 0},
@@ -167,6 +172,17 @@ static func amount_of(cell: int) -> int:
 	if not valid(cell):
 		return 0
 	return int(CELLS[cell]["amount"])
+
+
+## 这一格能不能选「按资产比例交」。0 表示只能交固定值（奢侈税就是这样）。
+static func percent_of(cell: int) -> int:
+	if not valid(cell):
+		return 0
+	return int(CELLS[cell].get("percent", 0))
+
+
+static func has_tax_choice(cell: int) -> bool:
+	return kind_of(cell) == Kind.TAX and percent_of(cell) > 0
 
 
 static func valid(cell: int) -> bool:

@@ -23,6 +23,9 @@ var _round_label: Label
 var _log_label: Label
 var _dice_label: Label
 var _buttons := {}
+var _tax_row: HBoxContainer
+var _tax_flat_button: Button
+var _tax_percent_button: Button
 
 var _ai_timer := 0.0
 var _busy := false
@@ -104,6 +107,21 @@ func _build_ui() -> void:
 
 	# 按钮分两排：上面是当前这一步能做的动作，下面是随时可点的杂项。
 	# 挤成一排的话，六个按钮每人才 160 像素，中文两三个字就顶满了。
+	# 所得税的二选一单独占一排：它只在落到所得税上时出现，
+	# 常年摆着会跟主按钮抢位置，也会让人以为随时能点。
+	_tax_row = HBoxContainer.new()
+	_tax_row.add_theme_constant_override("separation", 10)
+	_tax_row.visible = false
+	box.add_child(_tax_row)
+	_tax_flat_button = LightTheme.button("", 30)
+	_tax_flat_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tax_flat_button.pressed.connect(_on_tax_flat)
+	_tax_row.add_child(_tax_flat_button)
+	_tax_percent_button = LightTheme.button("", 30)
+	_tax_percent_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tax_percent_button.pressed.connect(_on_tax_percent)
+	_tax_row.add_child(_tax_percent_button)
+
 	_add_button_row(box, [
 		{"id": "roll", "text": tr("掷骰"), "call": _on_roll},
 		{"id": "buy", "text": tr("买下"), "call": _on_buy},
@@ -158,9 +176,14 @@ func _hint_for(state: Dictionary) -> String:
 	match int(state.get("phase", 0)):
 		TourRules.Phase.DECIDING:
 			var cell := int(state.get("pending_cell", -1))
-			if int(state.get("decision", 0)) == TourRules.Decision.BUY:
-				return tr("要买下 %s 吗？") % TourBoard.name_of(cell)
-			return tr("要升级 %s 吗？") % TourBoard.name_of(cell)
+			match int(state.get("decision", 0)):
+				TourRules.Decision.BUY:
+					return tr("要买下 %s 吗？") % TourBoard.name_of(cell)
+				TourRules.Decision.UPGRADE:
+					return tr("要升级 %s 吗？") % TourBoard.name_of(cell)
+				TourRules.Decision.TAX:
+					return tr("个人所得税：选一种交法")
+			return ""
 	if _rules.skip_of(LOCAL_PEER) > 0:
 		return tr("你在滞留区，掷骰会等一回合")
 	return tr("轮到你了")
@@ -199,6 +222,16 @@ func _refresh_buttons(state: Dictionary) -> void:
 	_buttons["fine"].disabled = not (mine and _rules.skip_of(LOCAL_PEER) > 0
 		and _rules.cash_of(LOCAL_PEER) >= TourRules.JAIL_FINE)
 	_buttons["again"].visible = finished
+
+	# 所得税的二选一：两个按钮上直接写出各要交多少，让玩家一眼比出来
+	var tax: Dictionary = state.get("tax", {})
+	var choosing_tax := mine and phase == TourRules.Phase.DECIDING \
+		and decision == TourRules.Decision.TAX
+	_tax_row.visible = choosing_tax
+	if choosing_tax:
+		_tax_flat_button.text = tr("交固定 %d") % int(tax.get("flat", 0))
+		_tax_percent_button.text = tr("按资产 %d%%（%d）") % [
+			int(tax.get("percent", 10)), int(tax.get("by_percent", 0))]
 
 
 # ---------------------------------------------------------------- 驱动
@@ -334,4 +367,14 @@ func _on_pay_fine() -> void:
 	if not bool(res.get("ok", false)):
 		_set_log(tr("不能交罚款：%s") % String(res.get("error", "")))
 		return
+	_refresh()
+
+
+func _on_tax_flat() -> void:
+	_rules.pay_tax_flat(LOCAL_PEER)
+	_refresh()
+
+
+func _on_tax_percent() -> void:
+	_rules.pay_tax_percent(LOCAL_PEER)
 	_refresh()

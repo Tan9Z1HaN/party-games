@@ -102,6 +102,22 @@ func _test_buttons() -> void:
 	_scene._refresh()
 	_check("轮到电脑时掷骰不可点", _scene._buttons["roll"].disabled)
 
+	# 所得税的二选一：平时藏着，落到所得税上才露出来，而且写着各交多少
+	_check("平时看不到交税的按钮", not _scene._tax_row.visible)
+	_scene._rules._cursor = 0
+	_scene._rules._phase = TourRules.Phase.DECIDING
+	_scene._rules._decision = TourRules.Decision.TAX
+	_scene._rules._pending_cell = 4
+	_scene._rules._pos[1] = 4
+	_scene._refresh()
+	_check("落到所得税上就露出两个选项", _scene._tax_row.visible)
+	_check("固定值写在按钮上",
+		"200" in _scene._tax_flat_button.text, _scene._tax_flat_button.text)
+	_check("按比例的金额也写出来了",
+		"60" in _scene._tax_percent_button.text, _scene._tax_percent_button.text)
+	_check("这时候主按钮都点不动",
+		_scene._buttons["roll"].disabled and _scene._buttons["buy"].disabled)
+
 
 ## 让 AI 把一局打完，过程中界面每步都刷新一次。
 func _test_play_loop() -> void:

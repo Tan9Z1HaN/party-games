@@ -25,6 +25,11 @@ static func choose(rules: TourRules, peer_id: int) -> int:
 
 	if rules.phase() == TourRules.Phase.DECIDING:
 		var cell := rules.pending_cell()
+		if rules.decision() == TourRules.Decision.TAX:
+			# 哪个便宜交哪个（rules 里已经算好了）
+			var options := rules.tax_options(peer_id)
+			return TourRules.Action.TAX_PERCENT \
+				if String(options["cheaper"]) == "percent" else TourRules.Action.TAX_FLAT
 		if rules.decision() == TourRules.Decision.BUY:
 			if rules.cash_of(peer_id) - rules.buy_price(cell) >= BUY_RESERVE:
 				return TourRules.Action.BUY
@@ -52,6 +57,10 @@ static func act(rules: TourRules, peer_id: int) -> Dictionary:
 			return rules.upgrade(peer_id)
 		TourRules.Action.PAY_FINE:
 			return rules.pay_fine(peer_id)
+		TourRules.Action.TAX_FLAT:
+			return rules.pay_tax_flat(peer_id)
+		TourRules.Action.TAX_PERCENT:
+			return rules.pay_tax_percent(peer_id)
 		TourRules.Action.PASS:
 			return rules.decline(peer_id)
 	return rules.roll(peer_id)
