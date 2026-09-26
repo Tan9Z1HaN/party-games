@@ -22,6 +22,10 @@ const REGISTRY := {
 		"logic": "res://games/uno/uno_game.gd",
 		"scene": "res://games/uno/main.tscn",
 	},
+	"tour": {
+		"logic": "res://games/tour/tour_game.gd",
+		"scene": "res://games/tour/main.tscn",
+	},
 }
 
 ## 元信息与配置项缓存。每次查都 new 一个游戏对象太浪费，

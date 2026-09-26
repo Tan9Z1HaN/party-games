@@ -39,14 +39,17 @@ const JAIL_CELL := 10
 ## 每边 10 格
 const SIDE := 10
 
-## 每一格：name 显示名 / kind 类别 / group 组号（-1 表示不属于任何组）
-## / price 地价 / amount 税额
+## 每一格：name 全名（日志和弹窗用）/ kind 类别 / group 组号（-1 不属于任何组）
+## / price 地价 / amount 税额 / short 格子上的短名（只有全名超过 4 个字时才写）
+##
+## **格子上只放短名**：一格在 1080 宽的竖屏上只有 98 像素，四个字已经是极限，
+## 五个字就读不出来了。全名留给弹窗和日志。
 const CELLS := [
 	{"name": "出发", "kind": Kind.GO, "group": -1, "price": 0, "amount": 0},
 	{"name": "三亚", "kind": Kind.CITY, "group": 0, "price": 60, "amount": 0},
 	{"name": "命运", "kind": Kind.FATE, "group": -1, "price": 0, "amount": 0},
 	{"name": "海口", "kind": Kind.CITY, "group": 0, "price": 80, "amount": 0},
-	{"name": "个人所得税", "kind": Kind.TAX, "group": -1, "price": 0, "amount": 200},
+	{"name": "个人所得税", "short": "所得税", "kind": Kind.TAX, "group": -1, "price": 0, "amount": 200},
 	{"name": "北京南站", "kind": Kind.STATION, "group": -1, "price": 200, "amount": 0},
 	{"name": "桂林", "kind": Kind.CITY, "group": 1, "price": 100, "amount": 0},
 	{"name": "机会", "kind": Kind.CHANCE, "group": -1, "price": 0, "amount": 0},
@@ -57,7 +60,7 @@ const CELLS := [
 	{"name": "国家电网", "kind": Kind.UTILITY, "group": -1, "price": 150, "amount": 0},
 	{"name": "兰州", "kind": Kind.CITY, "group": 2, "price": 180, "amount": 0},
 	{"name": "西安", "kind": Kind.CITY, "group": 2, "price": 200, "amount": 0},
-	{"name": "上海虹桥站", "kind": Kind.STATION, "group": -1, "price": 200, "amount": 0},
+	{"name": "上海虹桥站", "short": "虹桥", "kind": Kind.STATION, "group": -1, "price": 200, "amount": 0},
 	{"name": "长沙", "kind": Kind.CITY, "group": 3, "price": 200, "amount": 0},
 	{"name": "命运", "kind": Kind.FATE, "group": -1, "price": 0, "amount": 0},
 	{"name": "郑州", "kind": Kind.CITY, "group": 3, "price": 220, "amount": 0},
@@ -93,6 +96,40 @@ static func name_of(cell: int) -> String:
 	if not valid(cell):
 		return "?"
 	return String(CELLS[cell]["name"])
+
+
+## 画在格子上的短名。没写就是全名。
+static func short_name_of(cell: int) -> String:
+	if not valid(cell):
+		return "?"
+	return String(CELLS[cell].get("short", CELLS[cell]["name"]))
+
+
+## 40 格在棋盘上的坐标：格子是 11x11 网格里的一圈。
+##
+## 走法照抄经典大富翁：0 号在右下角，往左走底边、往上走左边、往右走顶边、
+## 往下走右边。所以 0/10/20/30 正好是四个角。
+##
+## area 是整块棋盘的尺寸。**不要求是正方形**：手机竖屏上把棋盘拉长成矩形，
+## 格子的高度就更大，名字更好放，纵向也不浪费——经典棋盘是方的，
+## 但那是给桌面设计的。
+static func cell_rect(cell: int, area: Vector2) -> Rect2:
+	var unit := area / 11.0
+	var col := 0
+	var row := 0
+	if cell <= 10:            # 底边：从右下角往左
+		col = 10 - cell
+		row = 10
+	elif cell <= 20:          # 左边：从下往上
+		col = 0
+		row = 10 - (cell - 10)
+	elif cell <= 30:          # 顶边：从左往右
+		col = cell - 20
+		row = 0
+	else:                     # 右边：从上往下
+		col = 10
+		row = cell - 30
+	return Rect2(Vector2(float(col), float(row)) * unit, unit)
 
 
 static func kind_of(cell: int) -> int:

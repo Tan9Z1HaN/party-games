@@ -49,6 +49,7 @@ var _rng := RandomNumberGenerator.new()
 var _chance: Array = []
 var _fate: Array = []
 var _notes: Array = []   ## 最近发生的事，界面直接拿去显示
+var _last_dice: Array = []   ## 最近一次掷骰的点数，界面拿它画骰子
 
 
 # ---------------------------------------------------------------- 开局
@@ -66,6 +67,7 @@ func setup(players: Array, cfg: Dictionary = {}, seed_value := 0) -> void:
 	_out.clear()
 	_turns_left.clear()
 	_notes.clear()
+	_last_dice.clear()
 
 	_rounds = maxi(1, int(cfg.get("rounds", DEFAULT_ROUNDS)))
 	var start_cash := maxi(1, int(cfg.get("start_cash", START_CASH)))
@@ -237,6 +239,46 @@ func notes() -> Array:
 	return _notes.duplicate()
 
 
+## 交给界面（以及以后的网络层）的状态字典。
+##
+## **界面只认这一份结构**，不直接读规则对象——单机时它由这里生成，联机时
+## 由主机广播过来，牌桌那层就不用为两边各写一套。这条是 UNO 那边踩出来的
+## 经验：等做完界面再抽这一层，改动会大得多。
+func snapshot() -> Dictionary:
+	var rows: Array = []
+	for peer in _order:
+		rows.append({
+			"peer_id": peer,
+			"name": _name_of(peer),
+			"cash": cash_of(peer),
+			"assets": assets_of(peer),
+			"pos": pos_of(peer),
+			"out": is_out(peer),
+			"skip": skip_of(peer),
+			"turns_left": turns_left_of(peer),
+		})
+	var owners := {}
+	var levels := {}
+	for cell in _owner:
+		owners[int(cell)] = owner_of(int(cell))
+		levels[int(cell)] = level_of(int(cell))
+	return {
+		"players": rows,
+		"owner": owners,
+		"level": levels,
+		"current": current_player(),
+		"phase": _phase,
+		"decision": _decision,
+		"pending_cell": _pending_cell,
+		"round": round_index(),
+		"rounds": _rounds,
+		"finished": is_finished(),
+		"log": last_note(),
+		"notes": _notes.duplicate(),
+		"dice": _last_dice.duplicate(),
+	}
+
+
 func last_note() -> String:
 	if _notes.is_empty():
 		return ""
@@ -262,6 +304,7 @@ func roll(peer_id: int) -> Dictionary:
 		return {"ok": true, "skipped": true}
 
 	var dice := [_rng.randi_range(1, 6), _rng.randi_range(1, 6)]
+	_last_dice = dice.duplicate()
 	var steps := int(dice[0]) + int(dice[1])
 	_move(peer_id, steps, true)
 	_note("%s 掷出 %d 点，走到 %s" % [
