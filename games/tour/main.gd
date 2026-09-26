@@ -14,6 +14,7 @@ const LOCAL_PEER := 1
 const MAX_AI := 4               ## 一台手机上最多几个电脑对手
 const AI_DELAY := 0.7           ## AI 每步之间停一下，太快看不清发生了什么
 const HOP_TIME := 0.35          ## 棋子逐格跳的总时长
+const CARD_TIME := 1.5          ## 抽卡动画的总时长
 
 var _rules: TourRules
 var _players: Array = []        ## [{peer_id, name, is_ai}]
@@ -32,6 +33,8 @@ var _busy := false
 ## 逐格跳动的动画：{peer_id, from, to, elapsed}
 var _hop := {}
 var _last_steps := 0
+var _card_t := -1.0             ## 抽卡动画的进度，负值表示没在放
+var _card_seq := -1             ## 已经放过的卡号，用来发现"又来了一张新的"
 
 
 func _ready() -> void:
@@ -61,6 +64,8 @@ func setup_solo(ai_count := 2) -> void:
 	_busy = false
 	_hop.clear()
 	_last_steps = 0
+	_card_t = -1.0
+	_card_seq = -1
 	_refresh()
 
 
@@ -154,6 +159,11 @@ func _refresh() -> void:
 		return
 	var state := _rules.snapshot()
 	state["hint"] = _hint_for(state)
+	# 抽到新卡就放动画。靠序号判断，不靠对比文案——同一条文案可能连着抽到。
+	if int(state.get("card_seq", 0)) != _card_seq:
+		_card_seq = int(state.get("card_seq", 0))
+		if not (state.get("card", {}) as Dictionary).is_empty():
+			_card_t = 0.0
 	_refresh_bar(state)
 	_board.apply(state)
 	_board.selected_cell = -1
@@ -238,6 +248,7 @@ func _refresh_buttons(state: Dictionary) -> void:
 
 func _process(delta: float) -> void:
 	_step_hop(delta)
+	_step_card(delta)
 	if _rules == null or _rules.is_finished() or _busy:
 		return
 
@@ -252,6 +263,19 @@ func _process(delta: float) -> void:
 
 	# 轮到真人：如果卡在"要不要买"上，界面已经在等按钮了
 	_ai_timer = 0.0
+
+
+## 抽卡动画。它只影响画面，卡片效果规则那边早就结算完了。
+func _step_card(delta: float) -> void:
+	if _card_t < 0.0 or _board == null:
+		return
+	_card_t += delta
+	var card: Dictionary = _rules.snapshot().get("card", {})
+	_board.set_card_anim(String(card.get("text", "")), bool(card.get("chance", false)),
+		clampf(_card_t / CARD_TIME, 0.0, 1.0))
+	if _card_t >= CARD_TIME:
+		_card_t = -1.0
+		_board.clear_card_anim()
 
 
 func _is_ai(peer_id: int) -> bool:

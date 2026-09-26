@@ -118,6 +118,20 @@ func _test_buttons() -> void:
 	_check("这时候主按钮都点不动",
 		_scene._buttons["roll"].disabled and _scene._buttons["buy"].disabled)
 
+	# 抽卡动画：靠序号发现"又来了一张新卡"，放完自己收掉
+	_scene._rules._last_card = {"text": "测试：收 200", "chance": true}
+	_scene._rules._card_seq += 1
+	_scene._refresh()
+	_check("抽到新卡会开始放动画", _scene._card_t >= 0.0, "%f" % _scene._card_t)
+	_scene._step_card(0.5)
+	_check("动画推进后棋盘中央有卡", not _scene._board._card.is_empty())
+	_scene._step_card(2.0)
+	_check("动画放完自己收掉", _scene._board._card.is_empty())
+	# 同一个文案连着抽到两次也要各放一次——所以才用序号而不是比文案
+	_scene._rules._card_seq += 1
+	_scene._refresh()
+	_check("同一条文案再抽到还会再放", _scene._card_t >= 0.0)
+
 
 ## 让 AI 把一局打完，过程中界面每步都刷新一次。
 func _test_play_loop() -> void:

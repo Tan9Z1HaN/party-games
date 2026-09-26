@@ -47,6 +47,8 @@ var _order: Array[int] = []
 ## 正在移动的棋子：peer_id -> 浮点格号（12.4 表示从 12 往 13 走了 40%）。
 ## 逐格跳动的动画只在表现层，规则那边早就走到位了。
 var _moving := {}
+## 抽卡动画：{text, chance, t}。t 从 0 走到 1 是一整段。
+var _card := {}
 ## 点格子看详情
 var selected_cell := -1
 
@@ -97,6 +99,18 @@ func clear_moving() -> void:
 	if _moving.is_empty():
 		return
 	_moving.clear()
+	queue_redraw()
+
+
+func set_card_anim(text: String, chance: bool, t: float) -> void:
+	_card = {"text": text, "chance": chance, "t": t}
+	queue_redraw()
+
+
+func clear_card_anim() -> void:
+	if _card.is_empty():
+		return
+	_card.clear()
 	queue_redraw()
 
 
@@ -157,6 +171,48 @@ func _draw() -> void:
 	for cell in TourBoard.size():
 		_draw_cell(cell, font)
 	_draw_center(font)
+	_draw_card_anim(font)
+
+
+## 抽到机会/命运时在中央翻一张卡。
+##
+## 前 40% 是翻面：背面被横向压扁到一条线，再从线展开成正面——
+## 这就是经典的翻牌，两段 `scale.x` 拼出来，不需要贴图也不需要 3D。
+## 剩下 60% 停着让人读完，最后 20% 淡出。
+func _draw_card_anim(font: Font) -> void:
+	if _card.is_empty():
+		return
+	var t: float = _card.get("t", 0.0)
+	var flip := clampf(t / 0.4, 0.0, 1.0)
+	var face_up := flip >= 0.5
+	var squash := absf(1.0 - flip * 2.0)     # 1 → 0 → 1
+	var alpha := 1.0 if t < 0.8 else clampf((1.0 - t) / 0.2, 0.0, 1.0)
+
+	var box := Vector2(board_scale() * 0.62, board_scale() * 0.30)
+	box.x = maxf(box.x * squash, 2.0)
+	var rect := Rect2(Vector2(size.x, size.y) * 0.5 - box * 0.5, box)
+	var chance: bool = bool(_card.get("chance", false))
+
+	if not face_up:
+		# 卡背：深色底 + 一个问号
+		draw_style_box(_box(Color(0.18, 0.20, 0.30, alpha), 18,
+			Color(1, 1, 1, alpha * 0.5), 3), rect)
+		var mark := "?"
+		var mark_size := int(box.y * 0.5)
+		var extent0 := font.get_string_size(mark, HORIZONTAL_ALIGNMENT_LEFT, -1, mark_size)
+		draw_string(font, rect.get_center() + Vector2(-extent0.x * 0.5, extent0.y * 0.32),
+			mark, HORIZONTAL_ALIGNMENT_LEFT, -1, mark_size,
+			Color(1, 1, 1, alpha * 0.9))
+		return
+
+	# 卡面：白底 + 文案。机会偏暖色、命运偏冷色，一眼分得出来
+	var tint := Color(0.94, 0.72, 0.20) if chance else Color(0.36, 0.55, 0.85)
+	draw_style_box(_box(Color(1, 1, 1, alpha), 18, tint, 5), rect)
+	var text := String(_card.get("text", ""))
+	var text_size := int(clampi(box.y * 0.34, 18, 56))
+	var extent := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size)
+	draw_string(font, rect.get_center() + Vector2(-extent.x * 0.5, extent.y * 0.32),
+		text, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size, Color(0.14, 0.15, 0.18, alpha))
 
 	# 棋子：先按格子分组，才知道同格要散开几个
 	var occupancy := {}

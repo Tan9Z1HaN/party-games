@@ -61,6 +61,8 @@ var _chance: Array = []
 var _fate: Array = []
 var _notes: Array = []   ## 最近发生的事，界面直接拿去显示
 var _last_dice: Array = []   ## 最近一次掷骰的点数，界面拿它画骰子
+var _last_card := {}         ## 最近抽到的卡片，界面拿它放抽卡动画
+var _card_seq := 0           ## 抽卡次数。界面靠它判断"又来了一张新的"
 
 
 # ---------------------------------------------------------------- 开局
@@ -78,6 +80,8 @@ func setup(players: Array, cfg: Dictionary = {}, seed_value := 0) -> void:
 	_out.clear()
 	_notes.clear()
 	_last_dice.clear()
+	_last_card = {}
+	_card_seq = 0
 
 	_max_rounds = maxi(0, int(cfg.get("max_rounds", DEFAULT_MAX_ROUNDS)))
 	var start_cash := maxi(1, int(cfg.get("start_cash", START_CASH)))
@@ -290,6 +294,8 @@ func snapshot() -> Dictionary:
 		"log": last_note(),
 		"notes": _notes.duplicate(),
 		"dice": _last_dice.duplicate(),
+		"card": _last_card.duplicate(),
+		"card_seq": _card_seq,
 	}
 
 
@@ -576,6 +582,8 @@ func _draw_card(peer_id: int, is_chance: bool, chain: int) -> void:
 	var card: Dictionary = deck.pop_front()
 	deck.append(card)          # 抽完放回队尾，循环使用
 	_note("%s 抽到：%s" % [_name_of(peer_id), String(card["text"])])
+	_last_card = {"text": String(card["text"]), "chance": is_chance}
+	_card_seq += 1
 	if is_out(peer_id):
 		return
 
