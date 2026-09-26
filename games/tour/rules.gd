@@ -441,6 +441,17 @@ func pay_tax_percent(peer_id: int) -> Dictionary:
 	return {"ok": true, "amount": amount}
 
 
+## 让某个人出局。联机时有人退房走这条——不走的话整局会卡在他身上。
+##
+## 内部破产判定也走这里，保证两条路径的后果一致：现金清 0、地释放、回合交棒。
+func eliminate(peer_id: int) -> void:
+	if is_out(peer_id):
+		return
+	_knock_out(peer_id)
+	if _phase == Phase.FINISHED:
+		return
+	_end_turn()
+
 ## 按当前局面推荐一个动作。界面（超时兜底）和 AI 都用它。
 func suggested_action(peer_id: int) -> Action:
 	if peer_id != current_player():

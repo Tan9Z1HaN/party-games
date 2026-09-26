@@ -23,7 +23,7 @@ const REGISTRY := {
 		"scene": "res://games/uno/main.tscn",
 	},
 	"tour": {
-		"logic": "res://games/tour/tour_game.gd",
+		"logic": "res://games/tour/game.gd",
 		"scene": "res://games/tour/main.tscn",
 	},
 }
