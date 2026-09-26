@@ -23,7 +23,8 @@ func _initialize() -> void:
 	_test_upgrade()
 	_test_tax_and_knockout()
 	_test_cards()
-	_test_fixed_rounds()
+	_test_knockout_ends_game()
+	_test_round_cap()
 	_test_seed_reproducible()
 	_test_full_game()
 	_finish()
@@ -100,20 +101,20 @@ func _test_rent() -> void:
 	var cell := 14
 	_check("西安地价 200", TourBoard.price_of(cell) == 200,
 		"%d" % TourBoard.price_of(cell))
-	_check("1 级 20", TourBoard.rent_of(cell, 1) == 20, "%d" % TourBoard.rent_of(cell, 1))
-	_check("2 级 44", TourBoard.rent_of(cell, 2) == 44, "%d" % TourBoard.rent_of(cell, 2))
-	_check("3 级 97", TourBoard.rent_of(cell, 3) == 97, "%d" % TourBoard.rent_of(cell, 3))
-	_check("4 级 213", TourBoard.rent_of(cell, 4) == 213, "%d" % TourBoard.rent_of(cell, 4))
-	_check("垄断翻倍", TourBoard.rent_of(cell, 2, true) == 88,
+	_check("1 级 50", TourBoard.rent_of(cell, 1) == 50, "%d" % TourBoard.rent_of(cell, 1))
+	_check("2 级 150", TourBoard.rent_of(cell, 2) == 150, "%d" % TourBoard.rent_of(cell, 2))
+	_check("3 级 450", TourBoard.rent_of(cell, 3) == 450, "%d" % TourBoard.rent_of(cell, 3))
+	_check("4 级 1350", TourBoard.rent_of(cell, 4) == 1350, "%d" % TourBoard.rent_of(cell, 4))
+	_check("垄断翻倍", TourBoard.rent_of(cell, 2, true) == 300,
 		"%d" % TourBoard.rent_of(cell, 2, true))
 
 	# 高铁站 100 / 200，公用事业 100 / 250，都是固定值
-	_check("高铁站 1 级 100", TourBoard.rent_of(5, 1) == 100)
-	_check("高铁站 2 级 200", TourBoard.rent_of(5, 2) == 200)
-	_check("公用事业 1 级 100", TourBoard.rent_of(12, 1) == 100)
-	_check("公用事业 2 级 250", TourBoard.rent_of(12, 2) == 250)
+	_check("高铁站 1 级 250", TourBoard.rent_of(5, 1) == 250)
+	_check("高铁站 2 级 500", TourBoard.rent_of(5, 2) == 500)
+	_check("公用事业 1 级 200", TourBoard.rent_of(12, 1) == 200)
+	_check("公用事业 2 级 500", TourBoard.rent_of(12, 2) == 500)
 	# 车站和公用事业不参与垄断翻倍
-	_check("高铁站不翻倍", TourBoard.rent_of(5, 1, true) == 100)
+	_check("高铁站不翻倍", TourBoard.rent_of(5, 1, true) == 250)
 
 	_check("城市最高 4 级", TourBoard.max_level(14) == 4)
 	_check("车站最高 2 级", TourBoard.max_level(5) == 2)
@@ -146,9 +147,10 @@ func _test_setup() -> void:
 	var rules := _new_game()
 	_check("起点都是出发格",
 		rules.pos_of(1) == 0 and rules.pos_of(2) == 0)
-	_check("起始资金 1500", rules.cash_of(1) == 1500, "%d" % rules.cash_of(1))
-	_check("每人都有 2 个回合",
-		rules.turns_left_of(1) == 2 and rules.turns_left_of(2) == 2)
+	_check("起始资金按常量来", rules.cash_of(1) == TourRules.START_CASH, "%d" % rules.cash_of(1))
+	_check("默认没有回合上限（结束靠破产，不靠轮数）",
+		rules.max_rounds() == 0, "%d" % rules.max_rounds())
+	_check("开局两个人都还在", rules.alive_count() == 2)
 	_check("开局等第一个玩家掷骰",
 		rules.phase() == TourRules.Phase.AWAIT_ROLL and rules.current_player() == 1)
 	_check("开局没人拥有地", rules.owner_of(14) == 0)
@@ -175,8 +177,7 @@ func _test_roll_and_move() -> void:
 		rules.decline(1)
 	_check("决定完交棒给下一个人", rules.current_player() == 2,
 		"%d" % rules.current_player())
-	_check("回合数减了", rules.turns_left_of(1) == 1,
-		"%d" % rules.turns_left_of(1))
+	_check("轮次往前走了", rules.round_index() >= 1, "%d" % rules.round_index())
 
 	# 没轮到的人不能掷
 	var bad := rules.roll(1)
@@ -197,7 +198,7 @@ func _test_roll_and_move() -> void:
 		if circle.phase() == TourRules.Phase.DECIDING:
 			circle.decline(2)
 	var cash_before := circle.cash_of(2)
-	_check("绕圈过程里攒下了过路费", cash_before >= 1500, "%d" % cash_before)
+	_check("绕圈过程里攒下了过路费", cash_before >= TourRules.START_CASH, "%d" % cash_before)
 
 
 # ---------------------------------------------------------------- 买地
@@ -215,7 +216,7 @@ func _test_buy() -> void:
 		rules.buy(1)
 		_check("地归买家", rules.owner_of(cell) == 1)
 		_check("等级是 1 级", rules.level_of(cell) == 1)
-		_check("扣了地价", rules.cash_of(1) == 1500 - price,
+		_check("扣了地价", rules.cash_of(1) == TourRules.START_CASH - price,
 			"%d" % rules.cash_of(1))
 		_check("交棒了", rules.current_player() == 2)
 		_check("这一格开始收过路费", rules.rent_at(cell) > 0)
@@ -387,27 +388,62 @@ func _test_cards() -> void:
 
 # ---------------------------------------------------------------- 固定轮数
 
-func _test_fixed_rounds() -> void:
-	print("\n-- 固定轮数 --")
-	var rules := _new_game({"players": 3, "rounds": 2})
+## 胜利条件：把别人搞破产，只剩一个人没出局。
+func _test_knockout_ends_game() -> void:
+	print("\n-- 破产即结束 --")
+	var rules := _new_game({"players": 2})
+	# 摆一个付不起的局面：2 号站在 1 号的满级地上，身上只剩 10 块
+	rules._owner[14] = 1
+	rules._level[14] = 4
+	rules._cash[2] = 10
+	rules._pos[2] = 14
+	rules._cursor = 1
+	rules._settle(2)
+	_check("付不出过路费的人出局", rules.is_out(2))
+	_check("出局的人不再被轮到", rules.alive_count() == 1)
+
+	rules._end_turn()
+	_check("只剩一个人，游戏立刻结束", rules.is_finished())
+	_check("赢家是没出局的那个", rules.winner() == 1, "%d" % rules.winner())
+
+	# 三个人的话：搞掉一个还不算完
+	var three := _new_game({"players": 3})
+	three._owner[14] = 1
+	three._level[14] = 4
+	three._cash[2] = 10
+	three._pos[2] = 14
+	three._cursor = 1
+	three._settle(2)
+	three._end_turn()
+	_check("三个人时搞掉一个还没结束", not three.is_finished())
+	_check("还剩下两个人", three.alive_count() == 2)
+
+	# 剩下的两个人里再搞掉一个
+	three._owner[16] = 1
+	three._level[16] = 4
+	three._cash[3] = 10
+	three._pos[3] = 16
+	three._cursor = three._order.find(3)
+	three._settle(3)
+	three._end_turn()
+	_check("搞掉第二个之后结束", three.is_finished())
+	_check("赢家还是 1 号", three.winner() == 1, "%d" % three.winner())
+
+
+## 回合上限只是保险丝：正常局不该走到它，但真拖住了得有人叫停。
+func _test_round_cap() -> void:
+	print("\n-- 回合上限（保险丝）--")
+	var rules := _new_game({"players": 2, "max_rounds": 3})
+	_check("上限读进来了", rules.max_rounds() == 3, "%d" % rules.max_rounds())
 	var guard := 0
 	while not rules.is_finished() and guard < 500:
 		guard += 1
 		TourAi.act(rules, rules.current_player())
-	_check("3 人 2 轮会自己结束", rules.is_finished(), "%d 步" % guard)
-	_check("步骤数合理（每人每回合最多两步）", guard <= 3 * 2 * 2 + 20,
-		"%d 步" % guard)
-	_check("结束时所有人都没有回合了", rules.turns_left_of(1) == 0)
-
-	var rows := rules.ranking()
-	_check("排名人数等于玩家人数", rows.size() == 3, "%d" % rows.size())
-	var sorted_ok := true
-	for i in range(1, rows.size()):
-		if int(rows[i - 1]["assets"]) < int(rows[i]["assets"]):
-			sorted_ok = false
-	_check("排名按资产从高到低", sorted_ok, str(rows))
-	_check("赢家是资产最高的那个",
-		rules.winner() == int(rows[0]["peer_id"]))
+	_check("到了上限会结束", rules.is_finished(), "%d 步" % guard)
+	_check("结束时的轮数不超过上限", rules.round_index() <= 4,
+		"%d" % rules.round_index())
+	var rows: Array = rules.ranking()
+	_check("仍然给出排名", rows.size() == 2, "%d" % rows.size())
 
 
 # ---------------------------------------------------------------- 可复现
@@ -445,10 +481,10 @@ func _test_seed_reproducible() -> void:
 # ---------------------------------------------------------------- 整局
 
 func _test_full_game() -> void:
-	print("\n-- 一整局（AI 对 AI）--")
-	var rules := _new_game({"players": 4, "rounds": 8})
+	print("\n-- 一整局打到有人破产（AI 对 AI）--")
+	var rules := _new_game({"players": 4})
 	var guard := 0
-	while not rules.is_finished() and guard < 4000:
+	while not rules.is_finished() and guard < 20000:
 		guard += 1
 		var peer := rules.current_player()
 		var before := _signature(rules)
@@ -457,11 +493,18 @@ func _test_full_game() -> void:
 		# 有人出局之后，同一个人连着走两次是正常的。
 		if _signature(rules) == before and not rules.is_finished():
 			print("      卡在：", rules.last_note())
-			guard = 4000
+			guard = 20000
 			break
 
-	_check("4 人 8 轮能跑完", rules.is_finished(), "%d 步" % guard)
-	_check("最后没有卡住（步数没打满）", guard < 4000, "%d 步" % guard)
+	_check("4 人能打到只剩一个", rules.is_finished(), "%d 步" % guard)
+	_check("最后没有卡住（步数没打满）", guard < 20000, "%d 步" % guard)
+	_check("赢家是唯一没出局的", rules.alive_count() == 1,
+		"还剩 %d 个" % rules.alive_count())
+	# 这是这套规则最要紧的一条：破产制**真的会把局面打到有人出局**。
+	# 如果租金太低、地买不起来，这条会长时间跑不完。
+	_check("过程中真的有人破产", _count_out(rules) == 3,
+		"出局 %d 个" % _count_out(rules))
+	print("      用了 %d 个回合（约 %d 轮）" % [guard, rules.round_index()])
 	var rows := rules.ranking()
 	_check("结算给出了四个人", rows.size() == 4, "%d" % rows.size())
 	var total := 0
@@ -471,15 +514,22 @@ func _test_full_game() -> void:
 	print("      最终排名：", rows)
 
 
+func _count_out(rules: TourRules) -> int:
+	var n := 0
+	for peer in rules.players():
+		if rules.is_out(peer):
+			n += 1
+	return n
+
+
 ## 局面指纹：剩余回合总数、阶段、当前玩家、现金总额。任何一步合法动作
 ## 都必然改变其中至少一项。
 func _signature(rules: TourRules) -> String:
-	var turns := 0
 	var cash := 0
 	for peer in rules.players():
-		turns += rules.turns_left_of(peer)
 		cash += rules.cash_of(peer)
-	return "%d|%d|%d|%d" % [turns, int(rules.phase()), rules.current_player(), cash]
+	return "%d|%d|%d|%d" % [rules.round_index(), int(rules.phase()),
+		rules.current_player(), cash]
 
 
 # ---------------------------------------------------------------- 收尾

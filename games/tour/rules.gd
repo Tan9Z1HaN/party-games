@@ -3,8 +3,12 @@ extends RefCounted
 
 ## 大富翁玩法的规则引擎。**纯逻辑**，不碰界面、不碰网络。
 ##
-## 「一局」= 每人走固定轮数，走完按总资产排名。
-## 为什么不是经典的「淘汰到最后」：那是两小时的游戏，聚会场景玩不起。
+## **胜利条件：把别人搞破产**，最后只剩一个人没出局，他赢。
+## 这是经典玩法——比起"走满几轮比资产"，破产制才有真正的博弈：
+## 买哪块、升到几级、敢不敢把钱花光，每一步都在赌。
+##
+## 代价是可能拖长。所以留了一个可选的回合上限（默认不限）当保险丝：
+## 真拖住了才按资产结算，正常局不该看到它。
 ## 设计取舍见 docs/环游中国（大富翁玩法）规划.md。
 ##
 ## 和 UnoRules 一个路子：所有判定都在这里，界面和网络层只读结果。
@@ -22,10 +26,17 @@ enum Decision { NONE, BUY, UPGRADE }
 ## 动作的结果，界面和 AI 用它决定下一步
 enum Action { ROLL, BUY, UPGRADE, PASS, PAY_FINE }
 
-const START_CASH := 1500
-const GO_BONUS := 200
+## 起始资金。破产制之下这就是"一根引线有多长"：给多了谁都破不了产。
+##
+## 这两个数字是量出来的，不是拍的：1500/200 的时候 4 个人要打 390 轮，
+## 1000/150 是 195 轮，都在"没人愿意玩"的范围里。
+const START_CASH := 600
+## 绕一圈的补贴。**这是全局收入的主要来源**，所以它对一局时长的影响
+## 比租金还大——收入盖过过路费，谁都破不了产。
+const GO_BONUS := 100
 const JAIL_FINE := 100
-const DEFAULT_ROUNDS := 8
+## 回合上限，0 表示不限。默认不限：结束靠破产，不靠轮数。
+const DEFAULT_MAX_ROUNDS := 0
 ## 卡片连锁移动的深度上限。卡片里再抽卡片是可能的（前进 → 落到机会格），
 ## 不限一下会转不出来。
 const MAX_CARD_CHAIN := 3
@@ -38,10 +49,10 @@ var _owner := {}         ## 格 -> peer
 var _level := {}         ## 格 -> 等级（1 起）
 var _skip := {}          ## peer -> 还要暂停几个回合
 var _out := {}           ## peer -> true 表示已出局
-var _turns_left := {}    ## peer -> 还剩几个回合
+var _turn_count := 0     ## 已经走了多少个回合（所有人加起来），只用来显示
+var _max_rounds := DEFAULT_MAX_ROUNDS
 
 var _cursor := 0
-var _rounds := DEFAULT_ROUNDS
 var _phase: Phase = Phase.AWAIT_ROLL
 var _decision: Decision = Decision.NONE
 var _pending_cell := -1
@@ -65,11 +76,10 @@ func setup(players: Array, cfg: Dictionary = {}, seed_value := 0) -> void:
 	_level.clear()
 	_skip.clear()
 	_out.clear()
-	_turns_left.clear()
 	_notes.clear()
 	_last_dice.clear()
 
-	_rounds = maxi(1, int(cfg.get("rounds", DEFAULT_ROUNDS)))
+	_max_rounds = maxi(0, int(cfg.get("max_rounds", DEFAULT_MAX_ROUNDS)))
 	var start_cash := maxi(1, int(cfg.get("start_cash", START_CASH)))
 
 	for entry in players:
@@ -81,7 +91,7 @@ func setup(players: Array, cfg: Dictionary = {}, seed_value := 0) -> void:
 		})
 		_cash[peer] = start_cash
 		_pos[peer] = 0
-		_turns_left[peer] = _rounds
+	_turn_count = 0
 
 	if seed_value == 0:
 		_rng.randomize()
@@ -150,21 +160,23 @@ func is_out(peer_id: int) -> bool:
 	return _out.has(peer_id)
 
 
-func turns_left_of(peer_id: int) -> int:
-	return int(_turns_left.get(peer_id, 0))
+## 回合上限。0 表示不限——正常局不会走到这一步。
+func max_rounds() -> int:
+	return _max_rounds
 
 
-func rounds_total() -> int:
-	return _rounds
-
-
-## 当前是第几轮（从 1 起）。所有人的剩余回合取最大值反推——
-## 中途有人出局时，按"还差几回合走完"算比数人头可靠。
+## 当前是第几轮（从 1 起）。
+##
+## **除以开局人数，不是还活着的人数**：有人出局之后一圈确实变短了，但
+## 玩家心里的"第几轮"是按开局那圈算的。按活人算的话，最后剩一个时
+## 每走一步都算一轮，轮数会飙得莫名其妙（实测显示过 78 轮，实际才 15 轮）。
 func round_index() -> int:
-	var most := 0
-	for peer in _order:
-		most = maxi(most, int(_turns_left.get(peer, 0)))
-	return clampi(_rounds - most + 1, 1, _rounds)
+	return _turn_count / maxi(1, _order.size()) + 1
+
+
+## 还没出局的人数
+func alive_count() -> int:
+	return _alive_count()
 
 
 ## 这个人手上这一组是不是集齐了。集齐 → 租金翻倍。
@@ -255,7 +267,6 @@ func snapshot() -> Dictionary:
 			"pos": pos_of(peer),
 			"out": is_out(peer),
 			"skip": skip_of(peer),
-			"turns_left": turns_left_of(peer),
 		})
 	var owners := {}
 	var levels := {}
@@ -271,7 +282,8 @@ func snapshot() -> Dictionary:
 		"decision": _decision,
 		"pending_cell": _pending_cell,
 		"round": round_index(),
-		"rounds": _rounds,
+		"max_rounds": _max_rounds,
+		"alive": alive_count(),
 		"finished": is_finished(),
 		"log": last_note(),
 		"notes": _notes.duplicate(),
@@ -478,7 +490,6 @@ func _pay(peer_id: int, amount: int) -> bool:
 func _knock_out(peer_id: int) -> void:
 	_out[peer_id] = true
 	_cash[peer_id] = 0
-	_turns_left[peer_id] = 0
 	var released := PackedStringArray()
 	for cell in _owner.keys():
 		if owner_of(int(cell)) == peer_id:
@@ -524,14 +535,13 @@ func _draw_card(peer_id: int, is_chance: bool, chain: int) -> void:
 
 ## 交棒。扣掉这个人的一个回合，走到下一个还有回合可走的人。
 func _end_turn() -> void:
-	var peer := current_player()
-	if peer != 0:
-		_turns_left[peer] = maxi(0, turns_left_of(peer) - 1)
+	_turn_count += 1
 	_decision = Decision.NONE
 	_pending_cell = -1
 	_phase = Phase.AWAIT_ROLL
 
-	if _all_turns_used() or _alive_count() <= 1:
+	# 结束条件：只剩一个人没破产。回合上限只是保险丝，正常局走不到。
+	if _alive_count() <= 1 or _over_max_rounds():
 		_phase = Phase.FINISHED
 		return
 	_advance_cursor()
@@ -542,16 +552,12 @@ func _advance_cursor() -> void:
 		return
 	for step in _order.size():
 		_cursor = posmod(_cursor + 1, _order.size())
-		var peer := _order[_cursor]
-		if not is_out(peer) and turns_left_of(peer) > 0:
+		if not is_out(_order[_cursor]):
 			return
 
 
-func _all_turns_used() -> bool:
-	for peer in _order:
-		if not is_out(peer) and turns_left_of(peer) > 0:
-			return false
-	return true
+func _over_max_rounds() -> bool:
+	return _max_rounds > 0 and round_index() > _max_rounds
 
 
 func _alive_count() -> int:

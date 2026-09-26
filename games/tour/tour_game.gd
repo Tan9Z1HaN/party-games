@@ -29,8 +29,11 @@ func get_meta_info() -> Dictionary:
 func get_config_schema() -> Array:
 	return [
 		{
-			"id": "rounds", "label": tr("轮数"), "type": "int",
-			"default": 8, "min": 4, "max": 16,
-			"help": tr("每人走几轮。轮数越多，买卖越充分，但一局也越长"),
+			# 胜利条件是「把别人搞破产」，所以没有"打几轮"这回事。
+			# 这一项是保险丝：万一谁都不破产，到上限就按资产结算。
+			# 默认 0（不限）——正常局走不到它。
+			"id": "max_rounds", "label": tr("回合上限（0 为不限）"), "type": "int",
+			"default": 0, "min": 0, "max": 100,
+			"help": tr("正常局靠破产结束。这一项只是防止一局无限拖下去"),
 		},
 	]

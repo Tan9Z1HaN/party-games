@@ -52,7 +52,8 @@ func setup_solo(ai_count := 2) -> void:
 		})
 
 	_rules = TourRules.new()
-	_rules.setup(_players, {"rounds": TourRules.DEFAULT_ROUNDS}, 0)
+	# 不传 max_rounds：默认不限，结束靠破产（见 rules.gd 顶部）
+	_rules.setup(_players, {}, 0)
 	_ai_timer = 0.0
 	_busy = false
 	_hop.clear()
@@ -138,8 +139,9 @@ func _refresh() -> void:
 	_refresh_bar(state)
 	_board.apply(state)
 	_board.selected_cell = -1
-	_round_label.text = tr("第 %d/%d 轮") % [
-		int(state.get("round", 1)), int(state.get("rounds", 1))]
+	# 胜利条件是搞破产，没有总轮数可显示；改成报"还剩几个人"
+	_round_label.text = tr("第 %d 轮　还剩 %d 人") % [
+		int(state.get("round", 1)), int(state.get("alive", 0))]
 	_log_label.text = String(state.get("log", ""))
 	_refresh_buttons(state)
 
@@ -148,7 +150,8 @@ func _refresh() -> void:
 ## 状态行只说"轮到谁"，这里要说"要你做什么"。
 func _hint_for(state: Dictionary) -> String:
 	if bool(state.get("finished", false)):
-		return tr("本局结束")
+		var winner := _rules.winner()
+		return tr("%s 赢了！") % _name_of(winner)
 	var current := int(state.get("current", 0))
 	if current != LOCAL_PEER:
 		return tr("%s 的回合…") % _name_of(current)

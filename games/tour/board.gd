@@ -28,6 +28,19 @@ enum Kind {
 	REST,      ## 休息区
 }
 
+## 每升一级租金翻几倍。
+##
+## 这个系数决定"多久能分出胜负"。破产制之下它得够狠：太温和的话，
+## 一圈 +200 的收入会盖过过路费，大家都越来越富，一局能拖几百轮
+## （实测 2.2 时 4 人要打 390 轮）。3.0 配 1000 起始资金刚好。
+const RENT_STEP := 3.0
+
+## 1 级地的租金 = 地价 × 这个系数。
+##
+## 也别小看它：破产制之下地大多停在 1~2 级（升级要钱），所以**这一项
+## 才是过路费的主力**。0.1 的时候一局要打两三百轮，玩家早就跑了。
+const RENT_BASE := 0.25
+
 ## 组名。同组集齐 → 租金翻倍。
 const GROUPS := [
 	"华南·暖冬", "华南·山水", "西北", "华中",
@@ -204,11 +217,11 @@ static func rent_of(cell: int, level: int, monopoly := false) -> int:
 	var base := 0
 	match kind_of(cell):
 		Kind.CITY:
-			base = roundi(float(price_of(cell)) * 0.1 * pow(2.2, float(level - 1)))
+			base = roundi(float(price_of(cell)) * RENT_BASE * pow(RENT_STEP, float(level - 1)))
 		Kind.STATION:
-			base = 100 if level == 1 else 200
+			base = 250 if level == 1 else 500
 		Kind.UTILITY:
-			base = 100 if level == 1 else 250
+			base = 200 if level == 1 else 500
 	if monopoly and kind_of(cell) == Kind.CITY:
 		base *= 2
 	return base
