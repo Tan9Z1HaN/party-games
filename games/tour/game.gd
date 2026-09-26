@@ -119,9 +119,6 @@ func on_player_left(peer_id: int) -> void:
 		return
 	# 走的人算破产：地释放，回合交棒。不这么做的话整局会卡在他身上。
 	_rules.eliminate(peer_id)
-	var idx := _slot_of(peer_id)
-	if idx >= 0:
-		_players.remove_at(idx)
 	state_changed.emit()
 
 

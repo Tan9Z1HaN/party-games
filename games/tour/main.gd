@@ -1,23 +1,25 @@
 extends Control
 
-## 《环游中国》牌桌。目前是**单机对电脑**的形态。
+## 《环游中国》牌桌。**这一层是纯视图**：只认 TourGame 给的状态字典，
+## 自己不碰规则，也分不清对面是 AI 还是网络上的真人。
 ##
-## 大富翁是轮流制，所以单机只能是"一个真人 + 若干 AI"：同屏热座会让
-## 后面的人看见前面的人的钱和地，而且一台手机传着玩太慢。
+## 大富翁是轮流制，所以单机只能是「一个真人 + 若干 AI」：同屏热座会让
+## 后面的人看见前面的人的钱和地，一台手机传着玩也太慢。
 ##
-## 数据来源只有一个：`_rules.snapshot()`。棋盘和面板都只认那份字典——
-## 联机时换成长机发来的同一份结构就行，界面一行都不用改。
+## 数据流和 UNO 那边一模一样：输入只走 _game.submit(报文)，
+## 状态只从 _game.state() 读。单机时 submit 直接进本地规则，联机时由房间层
+## 转给房主——界面这一层完全不用分叉。
 
 signal exit_requested
 
 const LOCAL_PEER := 1
 const MAX_AI := 4               ## 一台手机上最多几个电脑对手
-const AI_DELAY := 0.7           ## AI 每步之间停一下，太快看不清发生了什么
 const HOP_TIME := 0.35          ## 棋子逐格跳的总时长
 const CARD_TIME := 1.5          ## 抽卡动画的总时长
 
-var _rules: TourRules
-var _players: Array = []        ## [{peer_id, name, is_ai}]
+var _game: TourGame
+var _room: Room = null
+var _players: Array = []
 var _board: TourBoardView
 var _bar: HBoxContainer
 var _round_label: Label
@@ -28,13 +30,15 @@ var _tax_row: HBoxContainer
 var _tax_flat_button: Button
 var _tax_percent_button: Button
 
-var _ai_timer := 0.0
 var _busy := false
-## 逐格跳动的动画：{peer_id, from, to, elapsed}
+## 逐格跳动的动画：{peer, from, distance, elapsed}
 var _hop := {}
-var _last_steps := 0
 var _card_t := -1.0             ## 抽卡动画的进度，负值表示没在放
-var _card_seq := -1             ## 已经放过的卡号，用来发现"又来了一张新的"
+var _card_seq := -1             ## 已经放过的卡号，用来发现「又来了一张新的」
+## 上一次看到的状态，用来发现「谁动了」「骰子换了」——单机和联机都靠它，
+## 这样动画逻辑只有一份，不用管状态是本地算的还是网络送来的。
+var _prev_pos := {}
+var _prev_dice := []
 
 
 func _ready() -> void:
@@ -49,24 +53,61 @@ func _ready() -> void:
 func setup_solo(ai_count := 2) -> void:
 	var count := clampi(ai_count, 1, MAX_AI)
 	var names := ["小红", "小蓝", "小绿", "小黄"]
-	_players = [{"peer_id": LOCAL_PEER, "name": tr("你"), "is_ai": false}]
+	var roster: Array = [{"peer_id": LOCAL_PEER, "name": tr("你"), "is_ai": false}]
 	for i in count:
-		_players.append({
+		roster.append({
 			"peer_id": LOCAL_PEER + i + 1,
 			"name": names[i],
 			"is_ai": true,
 		})
+	_room = null
+	_start_game(roster, {})
+	if _game != null:
+		_game.start_round()
 
-	_rules = TourRules.new()
-	# 不传 max_rounds：默认不限，结束靠破产（见 rules.gd 顶部）
-	_rules.setup(_players, {}, 0)
-	_ai_timer = 0.0
+
+## 联机入口。app.gd 收到开局广播后调用，两端都会走这里。
+func setup_networked(room: Room, players: Array, config: Dictionary) -> void:
+	_room = room
+	_start_game(players, config)
+	if _game == null:
+		return
+	_game.bind_room(room)
+
+	room.attach_game(_game)
+	room.game_snapshot.connect(_on_net_snapshot)
+	# 开局由房主发起。客户端等主机发来的第一份快照。
+	if room.is_host():
+		_game.start_round()
+
+
+## 造一个 TourGame 并接上信号。单机和联机共用。
+func _start_game(players: Array, config: Dictionary) -> void:
+	if _game != null:
+		_game.queue_free()
+	_game = TourGame.new()
+	_game.name = "TourGame"
+	add_child(_game)
+	_game.state_changed.connect(_refresh)
+	_players = players
+	_game.setup(players, config)
 	_busy = false
 	_hop.clear()
-	_last_steps = 0
 	_card_t = -1.0
 	_card_seq = -1
+	_prev_pos.clear()
+	_prev_dice = []
 	_refresh()
+
+
+func _on_net_snapshot(snapshot: Dictionary) -> void:
+	if _game != null:
+		_game.apply_snapshot(snapshot)
+
+
+## 本机是哪个 peer。单机时是玩家列表里第一个不是 AI 的。
+func local_peer() -> int:
+	return _game.local_peer_id() if _game != null else LOCAL_PEER
 
 
 # ---------------------------------------------------------------- 界面
@@ -98,7 +139,7 @@ func _build_ui() -> void:
 	head.add_child(_dice_label)
 	box.add_child(head)
 
-	# 中间：棋盘。它自己撑成正方形（宽高取小的那个）
+	# 中间：棋盘。它自己撑满可用区域（竖屏上是竖长条）
 	_board = TourBoardView.new()
 	_board.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_board.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -110,9 +151,7 @@ func _build_ui() -> void:
 	_log_label.custom_minimum_size = Vector2(0, 76)
 	box.add_child(_log_label)
 
-	# 按钮分两排：上面是当前这一步能做的动作，下面是随时可点的杂项。
-	# 挤成一排的话，六个按钮每人才 160 像素，中文两三个字就顶满了。
-	# 所得税的二选一单独占一排：它只在落到所得税上时出现，
+	# 所得税的二选一单独占一排：只在落到所得税上时出现，
 	# 常年摆着会跟主按钮抢位置，也会让人以为随时能点。
 	_tax_row = HBoxContainer.new()
 	_tax_row.add_theme_constant_override("separation", 10)
@@ -127,6 +166,8 @@ func _build_ui() -> void:
 	_tax_percent_button.pressed.connect(_on_tax_percent)
 	_tax_row.add_child(_tax_percent_button)
 
+	# 按钮分两排：上面是当前这一步能做的动作，下面是随时可点的杂项。
+	# 挤成一排的话，六个按钮每人才 160 像素，中文两三个字就顶满了。
 	_add_button_row(box, [
 		{"id": "roll", "text": tr("掷骰"), "call": _on_roll},
 		{"id": "buy", "text": tr("买下"), "call": _on_buy},
@@ -135,7 +176,7 @@ func _build_ui() -> void:
 	])
 	_add_button_row(box, [
 		{"id": "fine", "text": tr("交罚款"), "call": _on_pay_fine},
-		{"id": "again", "text": tr("重开一局"), "call": func(): setup_solo(MAX_AI)},
+		{"id": "again", "text": tr("重开一局"), "call": _on_again},
 		{"id": "exit", "text": tr("退出"), "call": func(): exit_requested.emit()},
 	])
 
@@ -152,36 +193,70 @@ func _add_button_row(parent: Control, specs: Array) -> void:
 		_buttons[String(spec["id"])] = button
 
 
+## 重开一局。**只有单机有这条路**——联机时按钮是藏起来的：
+## 重发要所有人看到同一副局面，客户端自己重发只会跟主机对不上。
+func _on_again() -> void:
+	setup_solo(MAX_AI)
+
+
 # ---------------------------------------------------------------- 刷新
 
 func _refresh() -> void:
-	if _rules == null:
+	if _game == null:
 		return
-	var state := _rules.snapshot()
+	var state := _game.state()
+	if state.is_empty():
+		return
+
+	_catch_up_animations(state)
 	state["hint"] = _hint_for(state)
-	# 抽到新卡就放动画。靠序号判断，不靠对比文案——同一条文案可能连着抽到。
-	if int(state.get("card_seq", 0)) != _card_seq:
-		_card_seq = int(state.get("card_seq", 0))
-		if not (state.get("card", {}) as Dictionary).is_empty():
-			_card_t = 0.0
 	_refresh_bar(state)
 	_board.apply(state)
 	_board.selected_cell = -1
-	# 胜利条件是搞破产，没有总轮数可显示；改成报"还剩几个人"
+	# 胜利条件是搞破产，没有总轮数可显示；改成报「还剩几个人」
 	_round_label.text = tr("第 %d 轮　还剩 %d 人") % [
 		int(state.get("round", 1)), int(state.get("alive", 0))]
 	_log_label.text = String(state.get("log", ""))
 	_refresh_buttons(state)
 
 
+## 从状态的变化里发现「有人动了」「骰子换了」「抽到新卡了」，然后放动画。
+##
+## 靠**对比前后两份状态**，而不是靠事件回调：单机时状态是本地算的，
+## 联机时是每 0.25 秒送来的，对比出来一模一样，动画逻辑就只有一份。
+func _catch_up_animations(state: Dictionary) -> void:
+	for row in state.get("players", []):
+		var peer := int(row["peer_id"])
+		var pos := int(row["pos"])
+		if bool(row["out"]):
+			_prev_pos.erase(peer)
+			continue
+		if _prev_pos.has(peer) and int(_prev_pos[peer]) != pos:
+			_start_hop(peer, int(_prev_pos[peer]), pos)
+		_prev_pos[peer] = pos
+
+	var dice: Array = state.get("dice", [])
+	if dice.size() == 2 and str(dice) != str(_prev_dice):
+		_prev_dice = dice.duplicate()
+		_show_dice(dice)
+
+	# 抽到新卡就放动画。靠序号判断，不靠对比文案——同一条文案可能连着抽到。
+	if int(state.get("card_seq", 0)) != _card_seq:
+		_card_seq = int(state.get("card_seq", 0))
+		if not (state.get("card", {}) as Dictionary).is_empty():
+			_card_t = 0.0
+
+
 ## 棋盘中央那行提示：告诉玩家现在该干什么。
-## 状态行只说"轮到谁"，这里要说"要你做什么"。
+## 状态行只说「轮到谁」，这里要说「要你做什么」。
 func _hint_for(state: Dictionary) -> String:
 	if bool(state.get("finished", false)):
-		var winner := _rules.winner()
-		return tr("%s 赢了！") % _name_of(winner)
+		var rows := _game.get_results()
+		if rows.is_empty():
+			return tr("本局结束")
+		return tr("%s 赢了！") % _name_of(int(rows[0]["peer_id"]))
 	var current := int(state.get("current", 0))
-	if current != LOCAL_PEER:
+	if current != local_peer():
 		return tr("%s 的回合…") % _name_of(current)
 	match int(state.get("phase", 0)):
 		TourRules.Phase.DECIDING:
@@ -193,8 +268,8 @@ func _hint_for(state: Dictionary) -> String:
 					return tr("要升级 %s 吗？") % TourBoard.name_of(cell)
 				TourRules.Decision.TAX:
 					return tr("个人所得税：选一种交法")
-			return ""
-	if _rules.skip_of(LOCAL_PEER) > 0:
+			return tr("等着你决定")
+	if _row_of(state, local_peer()).get("skip", 0) > 0:
 		return tr("你在滞留区，掷骰会等一回合")
 	return tr("轮到你了")
 
@@ -217,7 +292,7 @@ func _refresh_bar(state: Dictionary) -> void:
 
 
 func _refresh_buttons(state: Dictionary) -> void:
-	var mine := int(state.get("current", 0)) == LOCAL_PEER and not _busy
+	var mine := int(state.get("current", 0)) == local_peer() and not _busy
 	var phase := int(state.get("phase", 0))
 	var decision := int(state.get("decision", 0))
 	var finished := bool(state.get("finished", false))
@@ -229,9 +304,11 @@ func _refresh_buttons(state: Dictionary) -> void:
 	# 「放弃」在需要决定的时候才点得动；没得决定时不能拿来跳回合
 	_buttons["decline"].disabled = not (mine and phase == TourRules.Phase.DECIDING)
 	# 交罚款：只有轮到自己、人在滞留区、钱也够的时候能点
-	_buttons["fine"].disabled = not (mine and _rules.skip_of(LOCAL_PEER) > 0
-		and _rules.cash_of(LOCAL_PEER) >= TourRules.JAIL_FINE)
-	_buttons["again"].visible = finished
+	var mine_row := _row_of(state, local_peer())
+	_buttons["fine"].disabled = not (mine and int(mine_row.get("skip", 0)) > 0
+		and int(mine_row.get("cash", 0)) >= TourRules.JAIL_FINE)
+	# 联机时不给"重开一局"：重发只能由房主发起，客户端点了只会两边对不上
+	_buttons["again"].visible = finished and _room == null
 
 	# 所得税的二选一：两个按钮上直接写出各要交多少，让玩家一眼比出来
 	var tax: Dictionary = state.get("tax", {})
@@ -244,70 +321,45 @@ func _refresh_buttons(state: Dictionary) -> void:
 			int(tax.get("percent", 10)), int(tax.get("by_percent", 0))]
 
 
+func _row_of(state: Dictionary, peer_id: int) -> Dictionary:
+	for row in state.get("players", []):
+		if int(row["peer_id"]) == peer_id:
+			return row
+	return {}
+
+
+func _name_of(peer_id: int) -> String:
+	for entry in _players:
+		if int(entry["peer_id"]) == peer_id:
+			return String(entry["name"])
+	return "?"
+
+
+func _set_log(text: String) -> void:
+	_log_label.text = text
+
+
 # ---------------------------------------------------------------- 驱动
 
 func _process(delta: float) -> void:
+	# 棋子和卡片的动画是纯表现，任何时候都要推进
 	_step_hop(delta)
 	_step_card(delta)
-	if _rules == null or _rules.is_finished() or _busy:
-		return
-
-	var current := _rules.current_player()
-	if _is_ai(current):
-		_ai_timer += delta
-		if _ai_timer < AI_DELAY:
-			return
-		_ai_timer = 0.0
-		_act_ai(current)
-		return
-
-	# 轮到真人：如果卡在"要不要买"上，界面已经在等按钮了
-	_ai_timer = 0.0
-
-
-## 抽卡动画。它只影响画面，卡片效果规则那边早就结算完了。
-func _step_card(delta: float) -> void:
-	if _card_t < 0.0 or _board == null:
-		return
-	_card_t += delta
-	var card: Dictionary = _rules.snapshot().get("card", {})
-	_board.set_card_anim(String(card.get("text", "")), bool(card.get("chance", false)),
-		clampf(_card_t / CARD_TIME, 0.0, 1.0))
-	if _card_t >= CARD_TIME:
-		_card_t = -1.0
-		_board.clear_card_anim()
-
-
-func _is_ai(peer_id: int) -> bool:
-	for entry in _players:
-		if int(entry["peer_id"]) == peer_id:
-			return bool(entry["is_ai"])
-	return false
-
-
-func _act_ai(peer_id: int) -> void:
-	var before_pos := _rules.pos_of(peer_id)
-	var res := TourAi.act(_rules, peer_id)
-	_after_action(peer_id, before_pos, res)
-
-
-## 一次动作之后的收尾：放动画、刷新。
-func _after_action(peer_id: int, before_pos: int, res: Dictionary) -> void:
-	if bool(res.get("skipped", false)):
-		_set_log(tr("%s 在滞留区待了一回合") % _name_of(peer_id))
-	elif res.has("dice"):
-		_last_steps = int(res.get("steps", 0))
-		_show_dice(res.get("dice", []))
-		_start_hop(peer_id, before_pos, _rules.pos_of(peer_id))
-	_refresh()
+	# 联机时由房间层统一 tick（两端一致）；单机这里自己推，AI 才会走。
+	if _room == null and _game != null:
+		_game.tick(delta)
 
 
 ## 棋子逐格跳：一格一跳，能看清经过了哪些格子（尤其「经过出发」）。
 func _start_hop(peer_id: int, from_cell: int, to_cell: int) -> void:
 	if from_cell == to_cell:
 		return
-	var distance := posmod(to_cell - from_cell, TourBoard.size())
-	_hop = {"peer": peer_id, "from": from_cell, "distance": distance, "elapsed": 0.0}
+	_hop = {
+		"peer": peer_id,
+		"from": from_cell,
+		"distance": posmod(to_cell - from_cell, TourBoard.size()),
+		"elapsed": 0.0,
+	}
 
 
 func _step_hop(delta: float) -> void:
@@ -322,6 +374,19 @@ func _step_hop(delta: float) -> void:
 		_hop.clear()
 
 
+## 抽卡动画。它只影响画面，卡片效果规则那边早就结算完了。
+func _step_card(delta: float) -> void:
+	if _card_t < 0.0 or _board == null or _game == null:
+		return
+	_card_t += delta
+	var card: Dictionary = _game.state().get("card", {})
+	_board.set_card_anim(String(card.get("text", "")), bool(card.get("chance", false)),
+		clampf(_card_t / CARD_TIME, 0.0, 1.0))
+	if _card_t >= CARD_TIME:
+		_card_t = -1.0
+		_board.clear_card_anim()
+
+
 func _show_dice(dice: Array) -> void:
 	if dice.size() != 2:
 		return
@@ -329,76 +394,57 @@ func _show_dice(dice: Array) -> void:
 		int(dice[0]), int(dice[1]), int(dice[0]) + int(dice[1])]
 
 
-func _name_of(peer_id: int) -> String:
-	for entry in _players:
-		if int(entry["peer_id"]) == peer_id:
-			return String(entry["name"])
-	return "?"
-
-
-func _set_log(text: String) -> void:
-	_log_label.text = text
-
-
 # ---------------------------------------------------------------- 输入
 
+## 所有操作都走这里：联机交给房间层转给房主，单机直接本地进规则。
+## 界面自己不判断合法性——被拒的话房主会把原因写进日志。
+func _submit(payload: PackedByteArray) -> void:
+	if _game != null:
+		_game.submit(payload)
+
+
 func _on_roll() -> void:
-	if _rules == null or _rules.current_player() != LOCAL_PEER:
-		return
-	var before := _rules.pos_of(LOCAL_PEER)
-	var res := _rules.roll(LOCAL_PEER)
-	if not bool(res.get("ok", false)):
-		_set_log(tr("不能掷骰：%s") % String(res.get("error", "")))
-		return
-	_after_action(LOCAL_PEER, before, res)
+	_submit(TourMessages.encode_roll())
 
 
 func _on_buy() -> void:
-	var res := _rules.buy(LOCAL_PEER)
-	_after_action(LOCAL_PEER, _rules.pos_of(LOCAL_PEER), res)
+	_submit(TourMessages.encode_buy())
 
 
 func _on_upgrade() -> void:
-	var res := _rules.upgrade(LOCAL_PEER)
-	_after_action(LOCAL_PEER, _rules.pos_of(LOCAL_PEER), res)
+	_submit(TourMessages.encode_upgrade())
 
 
 func _on_decline() -> void:
-	_rules.decline(LOCAL_PEER)
-	_refresh()
+	_submit(TourMessages.encode_decline())
+
+
+func _on_pay_fine() -> void:
+	_submit(TourMessages.encode_pay_fine())
+
+
+func _on_tax_flat() -> void:
+	_submit(TourMessages.encode_tax_flat())
+
+
+func _on_tax_percent() -> void:
+	_submit(TourMessages.encode_tax_percent())
 
 
 ## 点格子看详情。格子上只有一个短名，地价和过路费得点开才知道——
 ## 这是竖屏省空间的代价，用一次点击换回来。
 func _on_cell_tapped(cell: int) -> void:
+	var state := _game.state() if _game != null else {}
 	var parts := PackedStringArray([TourBoard.name_of(cell)])
 	if not TourBoard.is_purchasable(cell):
 		_set_log("　".join(parts))
 		return
 	parts.append(tr("地价 %d") % TourBoard.price_of(cell))
-	var owner := _rules.owner_of(cell)
+	var owner := int(state.get("owner", {}).get(cell, 0))
 	if owner == 0:
 		parts.append(tr("无主"))
 	else:
 		parts.append(tr("业主 %s") % _name_of(owner))
-		parts.append(tr("%d 级") % _rules.level_of(cell))
-		parts.append(tr("过路费 %d") % _rules.rent_at(cell))
+		parts.append(tr("%d 级") % int(state.get("level", {}).get(cell, 1)))
+		parts.append(tr("过路费 %d") % int(state.get("rent", {}).get(cell, 0)))
 	_set_log("　".join(parts))
-
-
-func _on_pay_fine() -> void:
-	var res := _rules.pay_fine(LOCAL_PEER)
-	if not bool(res.get("ok", false)):
-		_set_log(tr("不能交罚款：%s") % String(res.get("error", "")))
-		return
-	_refresh()
-
-
-func _on_tax_flat() -> void:
-	_rules.pay_tax_flat(LOCAL_PEER)
-	_refresh()
-
-
-func _on_tax_percent() -> void:
-	_rules.pay_tax_percent(LOCAL_PEER)
-	_refresh()

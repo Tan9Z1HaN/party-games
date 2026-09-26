@@ -274,13 +274,17 @@ func snapshot() -> Dictionary:
 		})
 	var owners := {}
 	var levels := {}
+	var rents := {}
 	for cell in _owner:
 		owners[int(cell)] = owner_of(int(cell))
 		levels[int(cell)] = level_of(int(cell))
+		# 过路费一起给出去：界面点格子看详情时不用自己再算一遍垄断
+		rents[int(cell)] = rent_at(int(cell))
 	return {
 		"players": rows,
 		"owner": owners,
 		"level": levels,
+		"rent": rents,
 		"current": current_player(),
 		"phase": _phase,
 		"decision": _decision,
