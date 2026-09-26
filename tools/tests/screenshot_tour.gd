@@ -27,11 +27,13 @@ func _run() -> void:
 		var tag: String = entry[2]
 		await _capture(size, tag, "start", 0)
 		await _capture(size, tag, "midgame", 10)
+		await _capture(size, tag, "result", -1)
 	print("环游中国截图完成")
 	quit(0)
 
 
-## steps > 0 时先让 AI 走几步，好看到有地、有等级、棋子散开的样子
+## steps > 0 时先让 AI 走几步，好看到有地、有等级、棋子散开的样子；
+## steps < 0 表示直接打到有人破产，用来看结算面板。
 func _capture(size: Vector2i, tag: String, screen: String, steps: int) -> void:
 	var sub := SubViewport.new()
 	sub.size = size
@@ -45,12 +47,25 @@ func _capture(size: Vector2i, tag: String, screen: String, steps: int) -> void:
 	table.setup_solo(3)
 	await _settle()
 
-	for i in steps:
-		if table._rules.is_finished():
+	# 规则对象在游戏层里，牌桌是纯视图（见 games/tour/main.gd 的说明）
+	var rules: TourRules = table._game.rules()
+	var guard := 0
+	while guard < (4000 if steps < 0 else steps):
+		guard += 1
+		if rules.is_finished():
 			break
-		# 人和 AI 都让 AI 逻辑代打，只为把画面推到中局
-		TourAi.act(table._rules, table._rules.current_player())
+		# 人和 AI 都让 AI 逻辑代打，只为把画面推到中局 / 残局
+		TourAi.act(rules, rules.current_player())
 	table._refresh()
+	# 动画不等帧（不锁帧时一帧几毫秒）：直接摆到终值再拍
+	table._end_card()
+	table._hop.clear()
+	table._board.clear_moving()
+	table._board.set_dice_anim(-1.0)
+	table._show_dice(table._dice_value)
+	if table._result_layer != null:
+		table._result_layer.modulate.a = 1.0
+		table._result_layer.scale = Vector2.ONE
 	await _settle()
 
 	var image := sub.get_texture().get_image()

@@ -424,14 +424,50 @@ func _test_cards() -> void:
 		"%d" % fine.cash_of(1))
 	_check("罚完就不用暂停了", fine.skip_of(1) == 0)
 
-	# 卡片内容本身：文案不能太长，效果必须合法
+	# 卡片内容本身：文案不能太长，效果必须合法，而且**文案要和效果对得上**
 	for deck in [TourCards.CHANCE, TourCards.FATE]:
+		_check("每堆至少 12 张卡", deck.size() >= 12, "%d 张" % deck.size())
+		_check("每堆不超过 16 张卡", deck.size() <= 16, "%d 张" % deck.size())
+		var seen := {}
 		for card in deck:
-			_check("卡片文案不超过 12 字", String(card["text"]).length() <= 12,
-				String(card["text"]))
+			var text := String(card["text"])
+			_check("卡片文案不超过 12 字", text.length() <= 12, text)
 			_check("卡片效果是已知类型",
 				int(card["effect"]) >= 0 and int(card["effect"]) <= TourCards.Effect.TO_JAIL,
-				String(card["text"]))
+				text)
+			_check("同一堆里文案不重复", not seen.has(text), text)
+			seen[text] = true
+			_check("文案和效果对得上（数字也一致）", _text_matches_effect(card), text)
+
+	# 两堆之间也不能重样：同一句话出现在机会和命运里，玩家会以为自己看错了
+	var all_texts := {}
+	for card in TourCards.CHANCE + TourCards.FATE:
+		var text := String(card["text"])
+		_check("机会和命运之间不重样", not all_texts.has(text), text)
+		all_texts[text] = true
+
+
+## 文案必须和效果对得上：写「前进」就真的前进，写「收 300」就真的收 300。
+##
+## 加卡片时最容易犯的错就是复制一行忘了改数字，而那种错在牌桌上完全看不出来——
+## 玩家只会觉得"这游戏怎么和卡片写的不一样"。
+func _text_matches_effect(card: Dictionary) -> bool:
+	var text := String(card["text"])
+	var value := int(card["value"])
+	match int(card["effect"]):
+		TourCards.Effect.GAIN:
+			return value > 0 and "收" in text and str(value) in text
+		TourCards.Effect.PAY:
+			return value > 0 and "付" in text and str(value) in text
+		TourCards.Effect.MOVE:
+			if value > 0:
+				return "前进" in text and str(value) in text
+			return value < 0 and "后退" in text and str(abs(value)) in text
+		TourCards.Effect.SKIP:
+			return value > 0 and "暂停" in text
+		TourCards.Effect.TO_JAIL:
+			return "滞留" in text
+	return false
 
 
 # ---------------------------------------------------------------- 固定轮数

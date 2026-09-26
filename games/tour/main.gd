@@ -14,14 +14,24 @@ signal exit_requested
 
 const LOCAL_PEER := 1
 const MAX_AI := 4               ## 一台手机上最多几个电脑对手
-const HOP_TIME := 0.35          ## 棋子逐格跳的总时长
-const CARD_TIME := 1.5          ## 抽卡动画的总时长
+## 逐格跳动的节奏**按格数算，不是一个固定总时长**：固定总时长的话，
+## 走 1 格和走 12 格一样慢，短步拖沓、长步又看不清跳过了哪些格。
+const HOP_STEP_TIME := 0.075    ## 每跳一格用多久
+const HOP_MIN_TIME := 0.20      ## 但至少这么久——一格也得看得见
+const HOP_MAX_TIME := 0.90      ## 最多这么久，12 格不能再长了
+const CARD_TIME := 1.8          ## 抽卡动画的总时长（点一下可以跳过）
+const DICE_ROLL_TIME := 0.45    ## 骰子摇动的时间
+const FLASH_TIME := 0.7         ## 落地那一格亮多久
+const CASH_FLASH_TIME := 1.4    ## 顶栏上「+200 / -150」挂多久
 
 var _game: TourGame
 var _room: Room = null
 var _players: Array = []
+var _ai_count := 2              ## 单机开几个电脑，重开一局按这个来
 var _board: TourBoardView
-var _bar: HBoxContainer
+## 用 HFlowContainer 而不是 HBox：6 个人再加上「+200」飘字，
+## 一行排不下——HBox 不会换行，最后那个人会被直接切掉。
+var _bar: HFlowContainer
 var _round_label: Label
 var _log_label: Label
 var _dice_label: Label
@@ -29,16 +39,28 @@ var _buttons := {}
 var _tax_row: HBoxContainer
 var _tax_flat_button: Button
 var _tax_percent_button: Button
+var _result_layer: CenterContainer
+var _result_title: Label
+var _result_sub: Label
+var _result_rows: VBoxContainer
+var _result_again: Button
 
 var _busy := false
-## 逐格跳动的动画：{peer, from, distance, elapsed}
+## 逐格跳动的动画：{peer, from, steps, elapsed, total}
 var _hop := {}
 var _card_t := -1.0             ## 抽卡动画的进度，负值表示没在放
 var _card_seq := -1             ## 已经放过的卡号，用来发现「又来了一张新的」
+var _card_tapped := false       ## 刚用「点一下」跳过抽卡，那一下不算点格子
+var _dice_t := -1.0             ## 骰子摇动的进度，负值表示没在摇
+var _dice_value := []           ## 摇完之后要显示的真实点数
+var _flash := {}                ## 落地高亮：{cell, t}
+var _cash_flash := {}           ## peer -> {delta, t}，顶栏上的收付飘字
 ## 上一次看到的状态，用来发现「谁动了」「骰子换了」——单机和联机都靠它，
 ## 这样动画逻辑只有一份，不用管状态是本地算的还是网络送来的。
 var _prev_pos := {}
 var _prev_dice := []
+var _prev_cash := {}
+var _result_shown := false      ## 结算面板已经弹过（玩家手动收掉之后别再弹）
 
 
 func _ready() -> void:
@@ -52,6 +74,7 @@ func _ready() -> void:
 
 func setup_solo(ai_count := 2) -> void:
 	var count := clampi(ai_count, 1, MAX_AI)
+	_ai_count = count
 	var names := ["小红", "小蓝", "小绿", "小黄"]
 	var roster: Array = [{"peer_id": LOCAL_PEER, "name": tr("你"), "is_ai": false}]
 	for i in count:
@@ -95,8 +118,17 @@ func _start_game(players: Array, config: Dictionary) -> void:
 	_hop.clear()
 	_card_t = -1.0
 	_card_seq = -1
+	_card_tapped = false
+	_dice_t = -1.0
+	_dice_value = []
+	_flash.clear()
+	_cash_flash.clear()
 	_prev_pos.clear()
 	_prev_dice = []
+	_prev_cash.clear()
+	_result_shown = false
+	if _result_layer != null:
+		_result_layer.visible = false
 	_refresh()
 
 
@@ -126,8 +158,9 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	# 顶部：每个人一行「色点 名字 现金」
-	_bar = HBoxContainer.new()
-	_bar.add_theme_constant_override("separation", 14)
+	_bar = HFlowContainer.new()
+	_bar.add_theme_constant_override("h_separation", 16)
+	_bar.add_theme_constant_override("v_separation", 4)
 	_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(_bar)
 
@@ -144,6 +177,7 @@ func _build_ui() -> void:
 	_board.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_board.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_board.cell_tapped.connect(_on_cell_tapped)
+	_board.tapped_anywhere.connect(_on_board_tapped)
 	box.add_child(_board)
 
 	_log_label = LightTheme.label("", 28)
@@ -180,6 +214,58 @@ func _build_ui() -> void:
 		{"id": "exit", "text": tr("退出"), "call": func(): exit_requested.emit()},
 	])
 
+	_build_result_panel()
+
+
+## 结算面板：打完一局盖在棋盘上，把资产排名摊开。
+##
+## 之前只在状态行写一句「谁赢了」——一局十几分钟，打完就一行小字，
+## 是整局观感上最亏的地方。排名里连现金和资产一起给，输的人才看得出输在哪。
+func _build_result_panel() -> void:
+	_result_layer = CenterContainer.new()
+	_result_layer.name = "ResultLayer"
+	_result_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# 盖住整屏：面板在的时候不该还能点到棋盘底下的按钮
+	_result_layer.mouse_filter = Control.MOUSE_FILTER_STOP
+	_result_layer.visible = false
+	add_child(_result_layer)
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel",
+		LightTheme.surface_box(LightTheme.SURFACE))
+	_result_layer.add_child(panel)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 16)
+	panel.add_child(col)
+
+	_result_title = LightTheme.label("", 44)
+	_result_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(_result_title)
+
+	_result_sub = LightTheme.label("", 30)
+	_result_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(_result_sub)
+
+	_result_rows = VBoxContainer.new()
+	_result_rows.add_theme_constant_override("separation", 10)
+	col.add_child(_result_rows)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	col.add_child(row)
+
+	var look := LightTheme.button(tr("看棋盘"), 30)
+	look.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	look.pressed.connect(func(): _result_layer.visible = false)
+	row.add_child(look)
+
+	# 联机时不给"再来一局"：重发只能房主发起，客户端点了只会两边对不上
+	_result_again = LightTheme.button(tr("再来一局"), 30)
+	_result_again.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_result_again.pressed.connect(_on_again)
+	row.add_child(_result_again)
+
 
 func _add_button_row(parent: Control, specs: Array) -> void:
 	var row := HBoxContainer.new()
@@ -196,7 +282,7 @@ func _add_button_row(parent: Control, specs: Array) -> void:
 ## 重开一局。**只有单机有这条路**——联机时按钮是藏起来的：
 ## 重发要所有人看到同一副局面，客户端自己重发只会跟主机对不上。
 func _on_again() -> void:
-	setup_solo(MAX_AI)
+	setup_solo(_ai_count)
 
 
 # ---------------------------------------------------------------- 刷新
@@ -218,6 +304,7 @@ func _refresh() -> void:
 		int(state.get("round", 1)), int(state.get("alive", 0))]
 	_log_label.text = String(state.get("log", ""))
 	_refresh_buttons(state)
+	_update_result(state)
 
 
 ## 从状态的变化里发现「有人动了」「骰子换了」「抽到新卡了」，然后放动画。
@@ -228,6 +315,14 @@ func _catch_up_animations(state: Dictionary) -> void:
 	for row in state.get("players", []):
 		var peer := int(row["peer_id"])
 		var pos := int(row["pos"])
+		# 钱的变化也要认出来：顶栏上挂一下「+200 / -150」，
+		# 不然一局里钱什么时候变的、变了多少，全靠盯数字
+		var cash := int(row["cash"])
+		# 出局的人不挂飘字：破产时现金被清 0，飘出来的是「-600」这种
+		# 看着像"又付了一大笔"的假数字，而顶栏已经写着"出局"了
+		if not bool(row["out"]) and _prev_cash.has(peer) and int(_prev_cash[peer]) != cash:
+			_flash_cash(peer, cash - int(_prev_cash[peer]))
+		_prev_cash[peer] = cash
 		if bool(row["out"]):
 			_prev_pos.erase(peer)
 			continue
@@ -238,7 +333,10 @@ func _catch_up_animations(state: Dictionary) -> void:
 	var dice: Array = state.get("dice", [])
 	if dice.size() == 2 and str(dice) != str(_prev_dice):
 		_prev_dice = dice.duplicate()
-		_show_dice(dice)
+		# 先摇一会儿再落定：直接蹦出点数没有"掷"的感觉
+		_dice_value = dice.duplicate()
+		_dice_t = 0.0
+		_dice_label.text = tr("　掷骰中…")
 
 	# 抽到新卡就放动画。靠序号判断，不靠对比文案——同一条文案可能连着抽到。
 	if int(state.get("card_seq", 0)) != _card_seq:
@@ -281,14 +379,110 @@ func _refresh_bar(state: Dictionary) -> void:
 	for row in state.get("players", []):
 		var peer := int(row["peer_id"])
 		var line := "%s %d" % [String(row["name"]), int(row["cash"])]
+		var out := bool(row["out"])
 		if bool(row["out"]):
 			line = "%s 出局" % String(row["name"])
-		var chip := LightTheme.label(line, 26)
-		chip.add_theme_color_override("font_color",
-			_board.color_of(peer) if not bool(row["out"]) else Color(0.6, 0.6, 0.62))
 		if peer == int(state.get("current", 0)):
-			chip.text = "▶ " + line
+			line = "▶ " + line
+		# 一个玩家占一小块：名字和现金保持他自己的颜色（不然四个人一起收付钱，
+		# 顶栏全是红的绿的，谁也认不出谁是谁），飘字单独一个颜色挂后面。
+		var chip := HBoxContainer.new()
+		chip.add_theme_constant_override("separation", 6)
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var who := LightTheme.label(line, 26)
+		who.add_theme_color_override("font_color",
+			Color(0.6, 0.6, 0.62) if out else _board.color_of(peer))
+		chip.add_child(who)
+		var flash: Dictionary = _cash_flash.get(peer, {})
+		if not flash.is_empty():
+			var delta := int(flash["delta"])
+			# 正的带 +，负的本身就带 -，别写成 "+-150"
+			var tag := LightTheme.label(("+%d" % delta) if delta > 0 else ("%d" % delta), 26)
+			tag.add_theme_color_override("font_color",
+				Color(0.09, 0.55, 0.22) if delta > 0 else Color(0.80, 0.22, 0.18))
+			chip.add_child(tag)
 		_bar.add_child(chip)
+
+
+func _flash_cash(peer_id: int, delta: int) -> void:
+	if delta == 0:
+		return
+	_cash_flash[peer_id] = {"delta": delta, "t": CASH_FLASH_TIME}
+
+
+# ---------------------------------------------------------------- 结算
+
+## 名次表：活着的人排前面（资产高的在前），出局的排后面。
+##
+## 不直接按 assets 排：出局的人资产都是 0，而"活着但两手空空"的人
+## 资产也是 0，按资产排会把活着的人排到出局的人后面——那不合直觉。
+func _standings(state: Dictionary) -> Array:
+	var rows: Array = []
+	for row in state.get("players", []):
+		rows.append(row)
+	rows.sort_custom(func(a, b):
+		if bool(a["out"]) != bool(b["out"]):
+			return not bool(a["out"])
+		return int(a["assets"]) > int(b["assets"]))
+	return rows
+
+
+func _update_result(state: Dictionary) -> void:
+	if _result_layer == null or not bool(state.get("finished", false)):
+		return
+	var rows := _standings(state)
+	if rows.is_empty():
+		return
+	_result_title.text = tr("%s 赢了") % String(rows[0]["name"])
+	_result_title.add_theme_color_override("font_color",
+		_board.color_of(int(rows[0]["peer_id"])))
+	_result_sub.text = _result_subtitle(rows)
+	LightTheme.clear_children(_result_rows)
+	for i in rows.size():
+		_result_rows.add_child(_result_row(rows[i], i))
+	_result_again.visible = _room == null
+	# 只自动弹一次：玩家点「看棋盘」收掉之后，别再弹回来
+	if not _result_shown:
+		_result_shown = true
+		LightTheme.present(_result_layer)
+
+
+func _result_subtitle(rows: Array) -> String:
+	var me := local_peer()
+	for i in rows.size():
+		if int(rows[i]["peer_id"]) != me:
+			continue
+		if i == 0:
+			# 标题已经写着「你 赢了」，副标题再来一句「你赢了」就重复了
+			return tr("你是唯一没破产的人")
+		if bool(rows[i]["out"]):
+			return tr("你第 %d 名，已出局") % (i + 1)
+		return tr("你第 %d 名") % (i + 1)
+	return tr("本局结束")
+
+
+func _result_row(row: Dictionary, rank: int) -> Control:
+	var peer := int(row["peer_id"])
+	var out := bool(row["out"])
+	var color := Color(0.6, 0.6, 0.62) if out else _board.color_of(peer)
+
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 14)
+
+	var medal := LightTheme.label(tr("%d.") % (rank + 1), 30)
+	medal.add_theme_color_override("font_color", color)
+	medal.custom_minimum_size = Vector2(64, 0)
+	line.add_child(medal)
+
+	var who := LightTheme.label(String(row["name"]) + (tr("（你）") if peer == local_peer() else ""), 30)
+	who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	who.add_theme_color_override("font_color", color)
+	line.add_child(who)
+
+	var detail := tr("出局") if out else tr("资产 %d（现金 %d）") % [
+		int(row["assets"]), int(row["cash"])]
+	line.add_child(LightTheme.label(detail, 28))
+	return line
 
 
 func _refresh_buttons(state: Dictionary) -> void:
@@ -345,20 +539,37 @@ func _process(delta: float) -> void:
 	# 棋子和卡片的动画是纯表现，任何时候都要推进
 	_step_hop(delta)
 	_step_card(delta)
+	_step_dice(delta)
+	_step_flash(delta)
+	_step_cash_flash(delta)
 	# 联机时由房间层统一 tick（两端一致）；单机这里自己推，AI 才会走。
-	if _room == null and _game != null:
+	# **动画没放完就先不推**：让 AI 等棋子跳完、卡片读完再动下一步，
+	# 否则一步接一步刷屏，看的人根本跟不上刚才发生了什么。
+	if _room == null and _game != null and not _is_animating():
 		_game.tick(delta)
+
+
+func _is_animating() -> bool:
+	return not _hop.is_empty() or _card_t >= 0.0 or _dice_t >= 0.0
 
 
 ## 棋子逐格跳：一格一跳，能看清经过了哪些格子（尤其「经过出发」）。
 func _start_hop(peer_id: int, from_cell: int, to_cell: int) -> void:
-	if from_cell == to_cell:
+	var steps := to_cell - from_cell
+	# 走过头就是绕圈回来：40 格的盘上差 38 格，其实是往回走了 2 格。
+	# 不管方向一律"往前绕"的话，抽到「后退 2 格」会横穿整张棋盘。
+	if steps > TourBoard.size() / 2:
+		steps -= TourBoard.size()
+	elif steps < -TourBoard.size() / 2:
+		steps += TourBoard.size()
+	if steps == 0:
 		return
 	_hop = {
 		"peer": peer_id,
 		"from": from_cell,
-		"distance": posmod(to_cell - from_cell, TourBoard.size()),
+		"steps": steps,
 		"elapsed": 0.0,
+		"total": clampf(absf(float(steps)) * HOP_STEP_TIME, HOP_MIN_TIME, HOP_MAX_TIME),
 	}
 
 
@@ -366,10 +577,16 @@ func _step_hop(delta: float) -> void:
 	if _hop.is_empty() or _board == null:
 		return
 	_hop["elapsed"] = float(_hop["elapsed"]) + delta
-	var t := clampf(float(_hop["elapsed"]) / HOP_TIME, 0.0, 1.0)
+	var t := clampf(float(_hop["elapsed"]) / float(_hop["total"]), 0.0, 1.0)
+	# 缓出：起步快、快落地时慢下来，比匀速自然
+	var eased := 1.0 - pow(1.0 - t, 2.0)
 	_board.set_moving(int(_hop["peer"]),
-		float(_hop["from"]) + float(_hop["distance"]) * t)
+		float(_hop["from"]) + float(_hop["steps"]) * eased)
 	if t >= 1.0:
+		_flash = {
+			"cell": posmod(int(_hop["from"]) + int(_hop["steps"]), TourBoard.size()),
+			"t": FLASH_TIME,
+		}
 		_board.clear_moving()
 		_hop.clear()
 
@@ -383,8 +600,51 @@ func _step_card(delta: float) -> void:
 	_board.set_card_anim(String(card.get("text", "")), bool(card.get("chance", false)),
 		clampf(_card_t / CARD_TIME, 0.0, 1.0))
 	if _card_t >= CARD_TIME:
-		_card_t = -1.0
+		_end_card()
+
+
+func _end_card() -> void:
+	_card_t = -1.0
+	if _board != null:
 		_board.clear_card_anim()
+
+
+## 骰子摇动：前 0.45 秒画乱跳的点数，之后落回真实点数并写出总数。
+func _step_dice(delta: float) -> void:
+	if _dice_t < 0.0:
+		return
+	_dice_t += delta
+	if _dice_t >= DICE_ROLL_TIME:
+		_dice_t = -1.0
+		_show_dice(_dice_value)
+	if _board != null:
+		_board.set_dice_anim(_dice_t)
+
+
+## 落地那一格的高亮，衰减着收掉。
+func _step_flash(delta: float) -> void:
+	if _flash.is_empty():
+		return
+	_flash["t"] = float(_flash["t"]) - delta
+	var amount := maxf(float(_flash["t"]) / FLASH_TIME, 0.0)
+	if _board != null:
+		_board.set_flash(int(_flash["cell"]), amount)
+	if amount <= 0.0:
+		_flash.clear()
+
+
+## 顶栏上的收付飘字到点了就收掉，顺便把顶栏重画一遍。
+func _step_cash_flash(delta: float) -> void:
+	if _cash_flash.is_empty():
+		return
+	var expired := false
+	for peer in _cash_flash.keys():
+		_cash_flash[peer]["t"] = float(_cash_flash[peer]["t"]) - delta
+		if float(_cash_flash[peer]["t"]) <= 0.0:
+			_cash_flash.erase(peer)
+			expired = true
+	if expired and _game != null:
+		_refresh_bar(_game.state())
 
 
 func _show_dice(dice: Array) -> void:
@@ -434,6 +694,10 @@ func _on_tax_percent() -> void:
 ## 点格子看详情。格子上只有一个短名，地价和过路费得点开才知道——
 ## 这是竖屏省空间的代价，用一次点击换回来。
 func _on_cell_tapped(cell: int) -> void:
+	# 刚点掉抽卡动画的那一下不算点格子：同一个手势不该既跳卡又开详情
+	if _card_tapped:
+		_card_tapped = false
+		return
 	var state := _game.state() if _game != null else {}
 	var parts := PackedStringArray([TourBoard.name_of(cell)])
 	if not TourBoard.is_purchasable(cell):
@@ -448,3 +712,12 @@ func _on_cell_tapped(cell: int) -> void:
 		parts.append(tr("%d 级") % int(state.get("level", {}).get(cell, 1)))
 		parts.append(tr("过路费 %d") % int(state.get("rent", {}).get(cell, 0)))
 	_set_log("　".join(parts))
+
+
+## 棋盘上点任意一处。抽卡动画挡着的时候，点一下直接看完——
+## 一张已经结算完的卡片让人干等 1.8 秒，太久了。
+func _on_board_tapped() -> void:
+	if _card_t < 0.0:
+		return
+	_card_tapped = true
+	_end_card()

@@ -4,6 +4,9 @@ extends Control
 ## 点了某一格。牌桌拿去显示详情（地价、业主、过路费）。
 signal cell_tapped(cell: int)
 
+## 点了棋盘上任意一处（含没点中格子）。牌桌拿它做「点一下跳过抽卡动画」。
+signal tapped_anywhere
+
 ## 棋盘：40 格围成一圈，中间留空给骰子和信息。
 ##
 ## **整个棋盘是一个 Control，用 _draw() 画**，不给每格建节点：
@@ -40,6 +43,8 @@ const CELL_GAP := 3.0
 const CELL_RADIUS := 10
 const TEXT_INK := Color(0.14, 0.15, 0.18)
 const DIM_INK := Color(0.45, 0.47, 0.52)
+## 骰子晃动的时间。这段时间里画的是乱跳的点数，之后才落回真实点数。
+const DICE_ROLL_TIME := 0.45
 
 var _state := {}
 ## 玩家的绘制顺序（下标 → 颜色）。用 peer_id 排序保证两端一致。
@@ -49,6 +54,11 @@ var _order: Array[int] = []
 var _moving := {}
 ## 抽卡动画：{text, chance, t}。t 从 0 走到 1 是一整段。
 var _card := {}
+## 骰子摇动动画的进度，负值表示不在摇（直接画真实点数）。
+var _dice_roll_t := -1.0
+## 刚落地的那一格会亮一下：主界面每帧把衰减后的亮度送进来。
+var _flash_cell := -1
+var _flash_amount := 0.0
 ## 点格子看详情
 var selected_cell := -1
 
@@ -65,6 +75,7 @@ func _gui_input(event: InputEvent) -> void:
 		point = event.position
 	if point == Vector2.INF:
 		return
+	tapped_anywhere.emit()
 	var cell := cell_at(point)
 	if cell < 0:
 		return
@@ -114,6 +125,25 @@ func clear_card_anim() -> void:
 	queue_redraw()
 
 
+## 摇骰子：t 从 0 走到 DICE_ROLL_TIME 期间画乱跳的点数。
+## 负值收工，直接画真实点数。乱跳也是状态——主界面每帧推进它。
+func set_dice_anim(t: float) -> void:
+	if is_equal_approx(_dice_roll_t, t):
+		return
+	_dice_roll_t = t
+	queue_redraw()
+
+
+## 刚落地的那一格亮一下。amount 从 1 衰减到 0，主界面每帧送进来。
+func set_flash(cell: int, amount: float) -> void:
+	var want := cell if amount > 0.0 else -1
+	if _flash_cell == want and is_equal_approx(_flash_amount, maxf(amount, 0.0)):
+		return
+	_flash_cell = want
+	_flash_amount = maxf(amount, 0.0)
+	queue_redraw()
+
+
 func color_of(peer_id: int) -> Color:
 	var index := _order.find(peer_id)
 	if index < 0:
@@ -146,19 +176,55 @@ func token_position(cell: int, index_in_cell: int, count_in_cell: int) -> Vector
 	center.y += rect.size.y * 0.30
 	if count_in_cell <= 1:
 		return center
-	var radius := rect.size.x * 0.22
-	var angle := TAU * float(index_in_cell) / float(count_in_cell) - PI * 0.5
+	# 同格的人越多，散得越开：棋子调大之后，固定的散开半径会让它们叠成一坨
+	var radius := rect.size.x * (0.18 + 0.04 * float(count_in_cell))
+	# 从正右方开始排：两个人时就是左右各一个（格子是横着宽的），
+	# 从正上方开始的话两个人会上下叠着挤在中间
+	var angle := TAU * float(index_in_cell) / float(count_in_cell)
 	return center + Vector2(cos(angle), sin(angle)) * radius
 
 
 ## 浮点格号 → 位置。在两个相邻格子的中心之间插值，读起来就是"逐格跳"。
-func position_between(float_cell: float) -> Vector2:
+##
+## arc > 0 时再加一段抛物线：起跳和落地贴地、中间最高。
+## 光是平移也能看出在走，但加上弧线才像"跳"，一格一格的感觉才出得来。
+func position_between(float_cell: float, arc := 0.0) -> Vector2:
 	var total := TourBoard.size()
 	var base := int(floor(float_cell))
 	var t := float_cell - float(base)
 	var a := cell_rect(posmod(base, total)).get_center()
 	var b := cell_rect(posmod(base + 1, total)).get_center()
-	return a.lerp(b, t)
+	var pos := a.lerp(b, t)
+	if arc > 0.0:
+		pos.y -= sin(PI * t) * arc
+	return pos
+
+
+## 棋子的位置表：每个还没出局的人一条，同格的按 index/count 散开。
+##
+## 抽成纯函数是为了能测——这段原来被误插进 _draw_card_anim() 里，
+## 结果**只有翻卡的那一瞬间棋子才画得出来**，平时满盘看不到人。
+## 单测拿不到画面，但至少能盯住"谁都算出来了"。
+func token_placements(state: Dictionary) -> Array:
+	var occupancy := {}
+	for row in state.get("players", []):
+		if bool(row["out"]):
+			continue
+		var cell := int(row["pos"])
+		if not occupancy.has(cell):
+			occupancy[cell] = []
+		occupancy[cell].append(int(row["peer_id"]))
+	var out: Array = []
+	for cell in occupancy:
+		var peers: Array = occupancy[cell]
+		for i in peers.size():
+			out.append({
+				"peer_id": int(peers[i]),
+				"cell": int(cell),
+				"index": i,
+				"count": peers.size(),
+			})
+	return out
 
 
 func _draw() -> void:
@@ -171,6 +237,7 @@ func _draw() -> void:
 	for cell in TourBoard.size():
 		_draw_cell(cell, font)
 	_draw_center(font)
+	_draw_tokens(font)
 	_draw_card_anim(font)
 
 
@@ -214,22 +281,22 @@ func _draw_card_anim(font: Font) -> void:
 	draw_string(font, rect.get_center() + Vector2(-extent.x * 0.5, extent.y * 0.32),
 		text, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size, Color(0.14, 0.15, 0.18, alpha))
 
-	# 棋子：先按格子分组，才知道同格要散开几个
-	var occupancy := {}
-	for row in _state.get("players", []):
-		if bool(row["out"]):
+
+## 画棋子。**必须在 _draw() 里调用**，别挪进 _draw_card_anim()——
+## 那段只在抽到卡片时才有机会跑，棋子会整局都看不见。
+func _draw_tokens(font: Font) -> void:
+	var lift := cell_rect(0).size.y * 0.22
+	for entry in token_placements(_state):
+		var peer := int(entry["peer_id"])
+		# 正在跳的人不在这里画：下面那个插值的位置才是他现在的样子
+		if _moving.has(peer):
 			continue
-		var cell := int(row["pos"])
-		if not occupancy.has(cell):
-			occupancy[cell] = []
-		occupancy[cell].append(int(row["peer_id"]))
-	for cell in occupancy:
-		var peers: Array = occupancy[cell]
-		for i in peers.size():
-			_draw_token(int(cell), int(peers[i]), i, peers.size(), font)
-	# 正在跳的棋子画在最上面，位置用插值
+		_draw_token_at(peer, token_position(int(entry["cell"]),
+			int(entry["index"]), int(entry["count"])), font)
+	# 正在跳的棋子画在最上面
 	for peer_id in _moving:
-		_draw_token_at(int(peer_id), position_between(float(_moving[peer_id])), font)
+		_draw_token_at(int(peer_id),
+			position_between(float(_moving[peer_id]), lift), font)
 
 
 func _draw_cell(cell: int, font: Font) -> void:
@@ -263,6 +330,12 @@ func _draw_cell(cell: int, font: Font) -> void:
 		draw_style_box(_box(Color(0, 0, 0, 0), CELL_RADIUS, Color(0.10, 0.12, 0.20), 3),
 			rect)
 
+	# 刚落到这一格：叠一层亮边，衰减着收掉。人很多的时候一眼看出是谁落在哪
+	if cell == _flash_cell and _flash_amount > 0.0:
+		var glow := Color(1.0, 0.98, 0.72, 0.85 * _flash_amount)
+		draw_style_box(_box(Color(1.0, 0.97, 0.60, 0.35 * _flash_amount),
+			CELL_RADIUS, glow, 4), rect)
+
 
 ## 棋盘正中间那块空地用来放骰子和提示。
 ## 40 格围成一圈，中间本来就是空的——不放东西就是一大片浪费。
@@ -270,10 +343,18 @@ func _draw_center(font: Font) -> void:
 	var center := Vector2(size.x * 0.5, size.y * 0.5)
 	var dice: Array = _state.get("dice", [])
 	if dice.size() == 2:
+		var faces := [int(dice[0]), int(dice[1])]
+		if _dice_roll_t >= 0.0 and _dice_roll_t < DICE_ROLL_TIME:
+			# 摇动期间画乱跳的点数。用「帧号 + 真实点数」播种，
+			# 同一帧画出来的两颗骰子在两端一致，也不动全局随机数。
+			var frame := int(_dice_roll_t / 0.06)
+			var rng := RandomNumberGenerator.new()
+			rng.seed = hash(Vector3i(frame, int(dice[0]), int(dice[1])))
+			faces = [rng.randi_range(1, 6), rng.randi_range(1, 6)]
 		var box := board_scale() * 0.11
 		var gap := box * 0.35
-		_draw_die(center + Vector2(-(box + gap) * 0.5, -box * 0.5), box, int(dice[0]))
-		_draw_die(center + Vector2((box + gap) * 0.5, -box * 0.5), box, int(dice[1]))
+		_draw_die(center + Vector2(-(box + gap) * 0.5, -box * 0.5), box, int(faces[0]))
+		_draw_die(center + Vector2((box + gap) * 0.5, -box * 0.5), box, int(faces[1]))
 
 	var hint := String(_state.get("hint", ""))
 	if hint.is_empty():
@@ -321,12 +402,9 @@ func _draw_level_dots(rect: Rect2, level: int) -> void:
 		draw_circle(Vector2(x - float(i) * gap, y), dot, Color(0.16, 0.17, 0.22))
 
 
-func _draw_token(cell: int, peer_id: int, index: int, count: int, font: Font) -> void:
-	_draw_token_at(peer_id, token_position(cell, index, count), font)
-
-
 func _draw_token_at(peer_id: int, pos: Vector2, _font: Font) -> void:
-	var radius := board_scale() / 11.0 * 0.16
+	# 棋子要在 1080 宽的屏上离着半米也看得见，所以别太小
+	var radius := board_scale() / 11.0 * 0.19
 	draw_circle(pos, radius * 1.25, Color(1, 1, 1, 0.92))
 	draw_circle(pos, radius, color_of(peer_id))
 	# 当前行动的人加一圈白环，一眼看出轮到谁

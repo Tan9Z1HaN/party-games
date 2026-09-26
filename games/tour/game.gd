@@ -13,7 +13,9 @@ extends MiniGame
 signal state_changed()
 
 const ID := "tour"
-const AI_DELAY := 0.8
+## 电脑对手思考的间隔。画面那边会等动画放完再让 AI 动下一步（见 main.gd
+## 的 _is_animating），所以这里不用再留很长——0.5 秒够看清"轮到谁"了。
+const AI_DELAY := 0.5
 
 var _players: Array = []      ## [{peer_id, name, is_ai}]
 var _cfg := {}
