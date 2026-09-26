@@ -874,6 +874,7 @@ func _refresh_captions() -> void:
 
 
 func _show_menu(message := "") -> void:
+	_clear_button_press()
 	if _game_screen != null:
 		_game_screen.queue_free()
 		_game_screen = null
@@ -900,6 +901,7 @@ func _show_menu(message := "") -> void:
 ## 回第一屏重选游戏。顺手退掉房间——游戏是入口级选择，
 ## 换游戏等于换一局，不能带着旧房间走。
 func _show_picker() -> void:
+	_clear_button_press()
 	if _game_screen != null:
 		_game_screen.queue_free()
 		_game_screen = null
@@ -955,6 +957,7 @@ func _open_game_screen(game_id: String) -> bool:
 
 
 func _show_lobby() -> void:
+	_clear_button_press()
 	_menu.visible = false
 	_lobby.visible = true
 	_refresh_lobby()
@@ -1135,6 +1138,25 @@ func _on_game_started(game_id: String, config: Dictionary) -> void:
 		return
 	_game_screen.setup_networked(_room, _room.get_state()["players"], config)
 
+
+## 切屏时把按钮的按压状态清掉。
+##
+## 按钮按下去之后如果界面被切走（换游戏、进大厅、进对局），release 事件就送
+## 不到它了，它会一直停在按下状态——回到这一屏时那个按钮还带着深色底，
+## 看着像"选中了"。Godot 没有公开的「取消按压」接口，但 set_disabled(true)
+## 内部会顺手清掉它，所以来回拨一下。
+func _clear_button_press() -> void:
+	_walk_buttons(self)
+
+
+func _walk_buttons(node: Node) -> void:
+	for child in node.get_children():
+		if child is BaseButton:
+			var button: BaseButton = child
+			var was_disabled := button.disabled
+			button.disabled = true
+			button.disabled = was_disabled
+		_walk_buttons(child)
 
 func _on_game_exit_requested() -> void:
 	var was_online := _room.is_in_room()

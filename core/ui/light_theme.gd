@@ -24,7 +24,11 @@ const FOCUS_RING := Color(0.25, 0.52, 0.95)
 ## 底衬是浅色渐变，半透明才看得出来是"玻璃"而不是"白块"。
 const GLASS := Color(1.0, 1.0, 1.0, 0.52)
 const GLASS_HOVER := Color(1.0, 1.0, 1.0, 0.80)
-const GLASS_PRESSED := Color(0.80, 0.88, 1.0, 0.92)
+## 按下时的底色。**刻意用中性灰而不是蓝色**：
+## 触摸界面上按钮很容易卡在按下状态（下面 _clear_button_press 在治本），
+## 而蓝色的按下色一旦卡住，看着就像"这个按钮被选中了"，很误导。
+## 灰色卡住只是稍微深一点，不刺眼。
+const GLASS_PRESSED := Color(0.86, 0.87, 0.90, 0.94)
 const GLASS_DISABLED := Color(1.0, 1.0, 1.0, 0.26)
 const GLASS_BORDER := Color(1.0, 1.0, 1.0, 0.90)
 const GLASS_SHADOW := Color(0.12, 0.18, 0.32, 0.18)
