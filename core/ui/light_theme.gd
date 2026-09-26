@@ -52,10 +52,15 @@ static func build() -> Theme:
 	t.set_stylebox("panel", "PopupMenu", surface_box(SURFACE))
 	t.set_stylebox("hover", "PopupMenu", surface_box(GLASS_PRESSED))
 
+	# 按钮有六个状态，**一个都不能漏**：漏掉的状态会退回引擎默认主题，
+	# 而默认主题是深色 + 蓝色高亮。之前漏了 hover_pressed，症状是
+	# 「点过的那个按钮一直留着浅蓝底」——因为它比 focus 还不显眼，
+	# 找了好几轮才反应过来是漏了一个状态。
 	for tname in ["Button", "OptionButton", "CheckBox", "CheckButton"]:
 		t.set_stylebox("normal", tname, surface_box(GLASS))
 		t.set_stylebox("hover", tname, surface_box(GLASS_HOVER))
 		t.set_stylebox("pressed", tname, surface_box(GLASS_PRESSED))
+		t.set_stylebox("hover_pressed", tname, surface_box(GLASS_PRESSED))
 		t.set_stylebox("disabled", tname, surface_box(GLASS_DISABLED))
 		t.set_stylebox("focus", tname, focus_box())
 

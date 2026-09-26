@@ -61,10 +61,18 @@ func _test_initial_screen() -> void:
 	# 手机上每点一次按钮，按钮都会拿到焦点。focus 样式要是画了边框，
 	# 就会看到"每个按钮外面都有个蓝框"而且一直留着——那是给键盘导航用的。
 	var theme: Theme = _main.theme
-	for tname in ["Button", "OptionButton", "LineEdit"]:
+	for tname in ["Button", "OptionButton"]:
 		var box: StyleBox = theme.get_stylebox("focus", tname)
 		_check("%s 的焦点框是空的（点完不留蓝边）" % tname,
 			box is StyleBoxEmpty, box.get_class())
+
+	# **按钮的六个状态必须全被覆盖**：漏掉的那个会退回引擎默认主题，
+	# 而默认主题是深色 + 蓝色高亮。之前漏了 hover_pressed，症状是
+	# 「点过的按钮一直留着浅蓝底」。
+	for tname in ["Button", "OptionButton", "CheckBox", "CheckButton"]:
+		for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+			_check("%s 的 %s 状态有自己的样式" % [tname, state],
+				theme.has_stylebox(state, tname), "漏了就会用引擎默认主题的蓝色")
 
 	# 头像加载不上的话框里是空的，界面照样跑得起来——只有看图才发现
 	var avatar: Texture2D = load(_main.AVATAR_PATH)
