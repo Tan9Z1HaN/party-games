@@ -11,8 +11,8 @@ config_version=5
 [application]
 
 config/name="聚在一起"
-config/description="局域网多人聚会游戏合集（你画我猜 / 画猜接龙 / UNO）"
-config/version="V1.0"
+config/description="局域网多人聚会游戏合集（你画我猜 / UNO / 环游中国）"
+config/version="V1.1"
 run/main_scene="res://app/main.tscn"
 config/quit_on_go_back=false
 config/features=PackedStringArray("4.7", "Mobile")
